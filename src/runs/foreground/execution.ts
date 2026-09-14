@@ -20,7 +20,6 @@ import {
 	type AgentProgress,
 	type ArtifactPaths,
 	type ControlEvent,
-	type ModelAttempt,
 	type RunSyncOptions,
 	type SingleResult,
 	type Usage,
@@ -56,10 +55,6 @@ import { resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { effectiveToolTimeoutMs, formatToolTimeoutMessage, resolveToolTimeoutMs, toolTimeoutCallKey, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
 import { evaluateCompletionMutationGuard, expectsImplementationMutation, hasMutationToolCapability, validateImplementationToolContract } from "../shared/completion-guard.ts";
 import { planCompletionEvidence } from "../shared/completion-evidence.ts";
-import { planAbortRecovery } from "../shared/abort-recovery.ts";
-import { planReadonlyModelContinuation, type LogicalRecoveryState } from "../shared/readonly-model-continuation.ts";
-import { getReadonlySessionEvidence, requestReadonlySessionEvidence, type SettledReadonlyEvidence } from "../shared/readonly-session-evidence.ts";
-import { getReadonlyChildModels } from "../shared/child-session.ts";
 import { arbitrateCompletionGuardRescue } from "../shared/llm-intent-arbiter.ts";
 import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
@@ -74,16 +69,14 @@ import { MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR, MISSING_STRUCTURED_OUTPUT_C
 import { formatMidToolExitError, isOrdinaryToolForMidToolExit } from "../shared/process-signal.ts";
 import { formatChildToolDiagnostic } from "../shared/tool-availability.ts";
 import { formatChildModelResolutionDiagnostic, isChildModelResolutionFailure } from "../shared/model-resolution-diagnostic.ts";
+import { planAbortRecovery } from "../shared/abort-recovery.ts";
 import { buildTimeoutRecoverySummary, collectTrackedMutationEvidence, snapshotTrackedMutations } from "../shared/mutation-evidence.ts";
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, hasSingleOutputChangedSinceSnapshot, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
-	buildModelCandidates,
 	formatSubagentModelVerificationError,
-	formatModelAttemptNote,
 	isContextOverflow,
-	isRetryableModelFailureAttempt,
-	recordRetryableModelFailure,
-} from "../shared/model-fallback.ts";
+	resolveModelSelection,
+} from "../shared/model-resolution.ts";
 import {
 	createMutatingFailureState,
 	didMutatingToolFail,
@@ -162,9 +155,6 @@ function persistSingleResultMetadata(input: {
 		usage: target.usage,
 		model: target.model,
 		requestedModel: target.requestedModel,
-		skippedModels: target.skippedModels,
-		attemptedModels: target.attemptedModels,
-		modelAttempts: target.modelAttempts,
 		durationMs: target.progressSummary?.durationMs,
 		toolCount: target.progressSummary?.toolCount,
 		error: target.error,
@@ -264,14 +254,6 @@ function snapshotResult(result: SingleResult, progress: AgentProgress): SingleRe
 		messages: result.outputMode === "file-only" && result.savedOutputPath ? undefined : result.messages ? [...result.messages] : undefined,
 		usage: { ...result.usage },
 		skills: result.skills ? [...result.skills] : undefined,
-		attemptedModels: result.attemptedModels ? [...result.attemptedModels] : undefined,
-		skippedModels: result.skippedModels ? result.skippedModels.map((skipped) => ({ ...skipped })) : undefined,
-		modelAttempts: result.modelAttempts
-			? result.modelAttempts.map((attempt) => ({
-				...attempt,
-				usage: attempt.usage ? { ...attempt.usage } : undefined,
-			}))
-			: undefined,
 		controlEvents: result.controlEvents ? result.controlEvents.map((event) => ({ ...event })) : undefined,
 		progress,
 		progressSummary: result.progressSummary ? { ...result.progressSummary } : undefined,
@@ -344,11 +326,10 @@ function structuredDelegationProgressChanged(
 	return false;
 }
 
-const AFTER_COMPACTION_SETTLEMENT = Symbol("afterCompactionSettlement");
-type AbortRecoverySingleResult = SingleResult & { [AFTER_COMPACTION_SETTLEMENT]?: true };
-const settledReadonlySource = new WeakMap<SingleResult, ChildSession>();
 
 const STOPPED_BEFORE_COMPLETION_ERROR = "Subagent stopped before completion.";
+const AFTER_COMPACTION_SETTLEMENT = Symbol("afterCompactionSettlement");
+type AbortRecoverySingleResult = SingleResult & { [AFTER_COMPACTION_SETTLEMENT]?: true };
 
 
 async function runSingleAttempt(
@@ -362,7 +343,6 @@ async function runSingleAttempt(
 		systemPrompt: string;
 		acceptancePrompt: string;
 		resolvedSkillNames?: string[];
-		modelCandidates?: string[];
 		skillsWarning?: string;
 		jsonlPath?: string;
 		artifactPaths?: ArtifactPaths;
@@ -373,9 +353,6 @@ async function runSingleAttempt(
 		orcaProgressTab?: OrcaProgressTab;
 		launchWarnings: { emitted: boolean };
 		verifyModel: boolean;
-		readonlyExpected?: SettledReadonlyEvidence;
-		readonlyModel?: string;
-		readonlyHandoffAllowed?: () => boolean;
 	},
 ): Promise<SingleResult> {
 	const effectiveThinking = options.thinkingOverride ?? agent.thinking;
@@ -437,7 +414,6 @@ async function runSingleAttempt(
 		forkCacheKey: options.context === "fork" ? deriveForkPromptCacheKey(options.parentSessionId) : undefined,
 		structuredOutput: options.structuredOutput,
 		fast: options.fast ?? agent.fast,
-		modelCandidates: shared.modelCandidates,
 		toolBudget: options.toolBudget,
 		permissionRules,
 		permissionAuditPath,
@@ -484,8 +460,6 @@ async function runSingleAttempt(
 			error: contractError,
 			usage: emptyUsage(),
 			model: modelArg,
-			modelAttempts: [],
-			attemptedModels: [],
 			progressSummary: { status: "failed", toolCount: 0, tokens: 0, durationMs: 0 },
 			...(toolPlan.capabilityCeiling ? { capabilityCeiling: toolPlan.capabilityCeiling } : {}),
 			...(toolPlan.capabilityAudit ? { capabilityAudit: toolPlan.capabilityAudit } : {}),
@@ -495,7 +469,7 @@ async function runSingleAttempt(
 	const { launchContractDigest } = resolveLaunchBinding({
 		agent,
 		task: shared.originalTask ?? task,
-		modelCandidates: shared.modelCandidates ?? [],
+		model: modelArg,
 		...(fast !== undefined ? { fast } : {}),
 		...(resolvedThinking ? { thinking: resolvedThinking } : {}),
 		systemPrompt: effectiveSystemPrompt,
@@ -582,6 +556,7 @@ async function runSingleAttempt(
 	let structuredOutputMessageStartIndex: number | undefined;
 	let toolAvailabilityError: string | undefined;
 	let abortedBySignal = options.signal?.aborted === true;
+	let afterCompactionSettlement = false;
 
 	if (options.workflowChildPermitLaunch) {
 		const permitError = consumeWorkflowChildPermit(options.workflowChildPermitLaunch.permit, {
@@ -602,7 +577,6 @@ async function runSingleAttempt(
 		}
 	}
 	const childSessions = options.childSessionFactory ?? childSessionFactory();
-	let afterCompactionSettlement = false;
 	const exitCode = await new Promise<number>((resolve) => {
 		const jsonlWriter = createJsonlWriter(shared.jsonlPath, { pause() {}, resume() {} });
 		let session: ChildSession | undefined;
@@ -809,7 +783,6 @@ async function runSingleAttempt(
 			});
 			// Report the run only after the child's extensions have shut down.
 			void Promise.resolve().then(() => session?.dispose()).catch(() => undefined).then(() => {
-				if (session && getReadonlySessionEvidence(session)) settledReadonlySource.set(result, session);
 				resolve(code);
 			});
 		};
@@ -1405,8 +1378,6 @@ async function runSingleAttempt(
 		void (async () => {
 			try {
 				const input = createReportedChildSessionInput(launch, shared.transcriptWriter);
-				requestReadonlySessionEvidence(input, shared.readonlyExpected);
-				if (shared.readonlyHandoffAllowed && !shared.readonlyHandoffAllowed()) throw new Error("Read-only continuation handoff vetoed.");
 				const created = await childSessions.create(input);
 				if (lifecycleFinished) {
 					void created.dispose();
@@ -1429,10 +1400,6 @@ async function runSingleAttempt(
 					abortChild();
 				}
 				options.onChildSession?.({ steer: (text) => created.steer(text), followUp: (text) => created.followUp(text) });
-				const actualReadonlyModel = shared.readonlyExpected && getReadonlyChildModels(created)?.current;
-				if (shared.readonlyExpected && (!actualReadonlyModel || actualReadonlyModel.fullId !== shared.readonlyModel
-					|| actualReadonlyModel.api !== shared.readonlyExpected.api || created.modelId !== shared.readonlyModel || abortedBySignal || interruptedByControl || result.timedOut
-					|| !shared.readonlyHandoffAllowed?.())) throw new Error("Read-only continuation handoff vetoed.");
 				await created.prompt(`Task: ${task}`);
 				settle(undefined);
 			} catch (error) {
@@ -1827,9 +1794,8 @@ async function runSyncCompletionInner(
 	}
 	const systemPrompt = buildEffectiveSystemPrompt({ agent, resolvedSkills, cwd: skillCwd, ...(options.outputPath ? { outputPath: options.outputPath } : {}) });
 
-	const { candidates, requestedModel, skippedModels } = buildModelCandidates(
+	const { model: selectedModel, requestedModel } = resolveModelSelection(
 		options.modelOverride ?? agent.model,
-		agent.fallbackModels,
 		options.availableModels,
 		agent.modelProvider ?? options.preferredModelProvider,
 		{
@@ -1838,23 +1804,9 @@ async function runSyncCompletionInner(
 			origin: options.modelOrigin ?? (options.modelOverrideFromParent ? "inherited" : "configured"),
 		},
 	);
-	if (options.workflowChildPermitLaunch && candidates.length > 1) {
-		const error = "Workflow child permit does not support model fallback.";
-		return redactResultPrompt(withRunContext({
-			index: options.index ?? 0,
-			agent: agent.name,
-			task,
-			exitCode: 1,
-			messages: [],
-			usage: emptyUsage(),
-			error,
-		}, options.context));
-	}
 	try {
-		for (const candidate of candidates) {
-			const model = applyThinkingSuffix(candidate, options.thinkingOverride ?? agent.thinking, options.thinkingOverride !== undefined);
-			assertThinkingWithinCeiling({ model, configThinking: options.thinkingOverride ?? agent.thinking, ceiling: options.thinkingCeiling, agent: agent.name, runId: options.runId });
-		}
+		const model = applyThinkingSuffix(selectedModel, options.thinkingOverride ?? agent.thinking, options.thinkingOverride !== undefined);
+		assertThinkingWithinCeiling({ model, configThinking: options.thinkingOverride ?? agent.thinking, ceiling: options.thinkingCeiling, agent: agent.name, runId: options.runId });
 	} catch (error) {
 		return redactResultPrompt(withRunContext({
 			index: options.index ?? 0,
@@ -1866,8 +1818,6 @@ async function runSyncCompletionInner(
 			error: error instanceof Error ? error.message : String(error),
 		}, options.context));
 	}
-	const attemptedModels: string[] = [];
-	const modelAttempts: ModelAttempt[] = [];
 	const aggregateUsage = emptyUsage();
 	const attemptNotes: string[] = [];
 	const launchWarnings = { emitted: false };
@@ -1918,10 +1868,11 @@ async function runSyncCompletionInner(
 		});
 	};
 
-	let intercomDetached = false;
 	let detachedReason: string | undefined;
+	const logicalDeadline = options.deadlineAt ?? (options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs);
 	const attemptOptions: RunSyncOptions = {
 		...options,
+		deadlineAt: logicalDeadline,
 		onDetachReceipt: (receipt) => {
 			receipt.acceptance = buildPendingAcceptanceLedger(effectiveAcceptance);
 			try {
@@ -1932,165 +1883,65 @@ async function runSyncCompletionInner(
 			const accepted = options.onDetachReceipt?.(receipt) === true;
 			if (accepted) {
 				detachedReason = receipt.detachedReason;
-				if (receipt.detachedReason === "intercom coordination") intercomDetached = true;
 			}
 			return accepted;
 		},
 	};
+	const candidate = selectedModel;
+	const verifyModel = Boolean(candidate) && !options.modelOverrideFromParent;
 	let lastResult: SingleResult | undefined;
-	const modelsToTry = candidates.length > 0 ? candidates : [undefined];
-	let recoveryState: LogicalRecoveryState = "unused";
-	let readonlyExpected: SettledReadonlyEvidence | undefined;
-	let readonlyModel: string | undefined;
-	let readonlySource: ChildSession | undefined;
-	// Ordinary startup retries retain their per-attempt timeout. Only retained
-	// continuation uses the original logical deadline, never a renewed allowance.
-	const continuationDeadline = options.deadlineAt ?? (options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs);
-	const readonlyHandoffAllowed = () => !options.signal?.aborted && !options.interruptSignal?.aborted
-		&& !intercomDetached && !detachedReason && !options.workflowChildPermitLaunch
-		&& options.usageBudget === undefined && options.toolBudget === undefined
-		&& (continuationDeadline === undefined || Date.now() < continuationDeadline)
-		&& (!readonlySource || getReadonlySessionEvidence(readonlySource) === readonlyExpected)
-		&& !readonlySource?.detached && !readonlySource?.shutDown;
-	let nextAttemptTask = task;
-	modelAttemptsLoop: for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
-		const candidate = modelsToTry[modelIndex];
-		// The inner loop re-runs the same candidate at most once, for abort recovery.
-		for (;;) {
-			const recoveringAbort = recoveryState === "abort-recovery";
-			const attemptTask = nextAttemptTask;
-			const verifyModel = Boolean(candidate) && !(options.modelOverrideFromParent && modelIndex === 0);
-			const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
-			if (recoveryState === "readonly-continuation") attemptOptions.deadlineAt = continuationDeadline;
-			const result = await runSingleAttempt(runtimeCwd, agent, attemptTask, candidate, attemptOptions, {
-				sessionEnabled,
-				systemPrompt,
-				acceptancePrompt,
-				resolvedSkillNames: resolvedSkills.length > 0 ? resolvedSkills.map((skill) => skill.name) : undefined,
-				skillsWarning: missingSkills.length > 0 ? `Skills not found: ${missingSkills.join(", ")}` : undefined,
-				jsonlPath,
-				artifactPaths: artifactPathsResult,
-				transcriptWriter,
-				attemptNotes,
-				modelCandidates: candidates
-					.map((modelCandidate) => applyThinkingSuffix(modelCandidate, options.thinkingOverride ?? agent.thinking, options.thinkingOverride !== undefined))
-					.filter((modelCandidate): modelCandidate is string => Boolean(modelCandidate)),
-				outputSnapshot,
-				originalTask: task,
-				orcaProgressTab,
-				launchWarnings,
-				verifyModel,
-				readonlyExpected,
-				readonlyModel,
-				readonlyHandoffAllowed: readonlyExpected ? readonlyHandoffAllowed : undefined,
-			});
-			lastResult = result;
-			if (!recoveringAbort) {
-				if (result.model) attemptedModels.push(result.model);
-				else if (candidate) attemptedModels.push(candidate);
-			}
-			sumUsage(aggregateUsage, result.usage);
-			totalToolCount += result.progressSummary?.toolCount ?? 0;
-			totalDurationMs += result.progressSummary?.durationMs ?? 0;
-			const attemptSucceeded = result.exitCode === 0 && !result.error;
-			const attempt: ModelAttempt = {
-				model: result.model ?? candidate ?? agent.model ?? "default",
-				success: attemptSucceeded,
-				exitCode: result.exitCode,
-				error: result.error,
-				usage: { ...result.usage },
-			};
-			modelAttempts.push(attempt);
-			// A consumed retained continuation is terminal even on a startup error or abort.
-			if (recoveryState === "readonly-continuation") break modelAttemptsLoop;
-			const source = settledReadonlySource.get(result);
-			const evidence = source && getReadonlySessionEvidence(source);
-			const models = source && getReadonlyChildModels(source);
-			// Deny non-text retained inputs, including unknown blocks. Count bytes once,
-			// not restored usage (the latter belongs to earlier attempts/runs).
-			const textOnly = evidence && (JSON.parse(evidence.contextJson) as Array<{ role: string; content: unknown }>).every((message) =>
-				typeof message.content === "string" || Array.isArray(message.content) && message.content.every((block) =>
-					block?.type === "text" || message.role === "assistant" && block?.type === "toolCall"));
-			const retainedBytes = evidence && models ? Buffer.byteLength(evidence.contextJson) + models.requestBytes : Infinity;
-			const resolvedCandidates = modelsToTry.map((reference, index) => index === modelIndex ? models?.current : reference ? models?.resolve(reference) : undefined);
-			const continuation = planReadonlyModelContinuation({
-				source, recoveryState, currentIndex: modelIndex,
-				candidates: resolvedCandidates.map((resolved, index) => {
-					// A conservative byte ceiling includes serialized history, actual system
-					// prompt/tools, framing/continuation headroom and full output allowance.
-					const required = resolved?.maxTokens ? retainedBytes + 4096 + resolved.maxTokens : Infinity;
-					return {
-						resolved: resolved?.api ? { provider: resolved.provider, model: resolved.id, api: resolved.api } : undefined,
-						tried: index <= modelIndex,
-						compatibility: textOnly && resolved?.input?.includes("text") && (resolved.contextWindow ?? 0) >= required ? "compatible" as const : "unknown" as const,
-					};
-				}),
-				lifecycleAllowsContinuation: !attemptSucceeded && readonlyHandoffAllowed() && !result.stopped && !result.detached && !result.interrupted && !result.timedOut,
-				effectsAllowContinuation: !result.structuredOutputFailed && !result.toolBudgetBlocked && !result.progress?.currentTool
-					&& !result.outputSaveError && (!result.effects?.fileMutation || result.effects.fileMutation.status === "not-applicable"),
-				budget: options.toolBudget ? "tool-budget-configured" : options.usageBudget ? "unknown" : "unconfigured",
-				knownContextOverflow: Boolean(result.contextOverflow || isContextOverflow(result.error)),
-			});
-			if (continuation.kind === "continue") {
-				recoveryState = continuation.recoveryState; // consume BEFORE any sibling creation
-				readonlyExpected = continuation.expected;
-				readonlySource = source;
-				readonlyModel = resolvedCandidates[continuation.candidateIndex]?.fullId;
-				nextAttemptTask = continuation.prompt;
-				attemptNotes.push(`[readonly-continuation] ${attempt.model} failed with HTTP 429 after read-only progress; continuing retained session once with ${readonlyModel}.`);
-				modelIndex = continuation.candidateIndex - 1;
-				continue modelAttemptsLoop;
-			}
-			if (!attemptSucceeded) {
-				const afterCompactionSettlement = (result as AbortRecoverySingleResult)[AFTER_COMPACTION_SETTLEMENT];
-				const abortRecovery = planAbortRecovery({
-					messages: result.messages ?? [],
-					error: result.error,
-					processSignal: result.processSignal,
-					sessionAvailable: Boolean(options.sessionFile && existsSync(options.sessionFile)),
-					alreadyResumed: recoveryState !== "unused",
-					stopped: result.stopped || result.detached || options.signal?.aborted,
-					interrupted: result.interrupted || intercomDetached || options.interruptSignal?.aborted,
-					timedOut: result.timedOut,
-					toolBudgetExhausted: result.toolBudgetBlocked,
-					usageBudgetExhausted: false,
-					structuredOutputFailed: result.structuredOutputFailed,
-					acceptanceFailed: false,
-					currentTool: result.progress?.currentTool,
-					afterCompactionSettlement,
-				});
-				if (abortRecovery.action === "resume") {
-					recoveryState = "abort-recovery";
-					nextAttemptTask = abortRecovery.prompt;
-					attemptNotes.push("[abort-recovery] provider/transport abort after useful progress; resuming the retained child session once.");
-					continue;
-				}
-				if (abortRecovery.diagnostic) {
-					result.error = result.error ? `${result.error}\n${abortRecovery.diagnostic}` : abortRecovery.diagnostic;
-					attempt.error = result.error;
-					break modelAttemptsLoop;
-				}
-			}
-			if (recoveringAbort && !attemptSucceeded) break modelAttemptsLoop;
-			if (options.workflowChildPermitLaunch && !attemptSucceeded) break modelAttemptsLoop;
-			// Preserve the legacy intercom handoff contract: once this logical run has
-			// been handed to a supervisor, terminating that attempt must not launch a
-			// model fallback. Explicit user detach retains fallback.
-			if (intercomDetached || result.timedOut) break modelAttemptsLoop;
-			if (attemptSucceeded) break modelAttemptsLoop;
-
-			const retryableModelFailure = isRetryableModelFailureAttempt({ error: result.error, messages: result.messages, toolCount: result.progressSummary?.toolCount });
-			if (retryableModelFailure) recordRetryableModelFailure(result.model ?? candidate, result.error);
-			if (isContextOverflow(result.error)) {
-				result.contextOverflow = true;
-				attemptNotes.push(`[fallback] ${attempt.model} failed: context overflow — the input exceeds this model's context window. Reduce the task input or use a model with a larger context window.`);
-				break modelAttemptsLoop;
-			}
-			if (!retryableModelFailure || modelIndex === modelsToTry.length - 1) break modelAttemptsLoop;
-			attemptNotes.push(formatModelAttemptNote(attempt, modelsToTry[modelIndex + 1]));
-			break;
+	let recoveryPrompt = task;
+	for (let attemptIndex = 0; attemptIndex < 2; attemptIndex++) {
+		const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
+		const attemptResult = await runSingleAttempt(runtimeCwd, agent, recoveryPrompt, candidate, attemptOptions, {
+			sessionEnabled,
+			systemPrompt,
+			acceptancePrompt,
+			resolvedSkillNames: resolvedSkills.length > 0 ? resolvedSkills.map((skill) => skill.name) : undefined,
+			skillsWarning: missingSkills.length > 0 ? `Skills not found: ${missingSkills.join(", ")}` : undefined,
+			jsonlPath,
+			artifactPaths: artifactPathsResult,
+			transcriptWriter,
+			attemptNotes,
+			outputSnapshot,
+			originalTask: task,
+			orcaProgressTab,
+			launchWarnings,
+			verifyModel,
+		});
+		lastResult = attemptResult;
+		sumUsage(aggregateUsage, attemptResult.usage);
+		totalToolCount += attemptResult.progressSummary?.toolCount ?? 0;
+		totalDurationMs += attemptResult.progressSummary?.durationMs ?? 0;
+		if (attemptResult.exitCode === 0 && !attemptResult.error) break;
+		const recovery = planAbortRecovery({
+			messages: attemptResult.messages ?? [],
+			error: attemptResult.error,
+			processSignal: attemptResult.processSignal,
+			sessionAvailable: Boolean(options.sessionFile && existsSync(options.sessionFile)),
+			alreadyResumed: attemptIndex > 0,
+			stopped: attemptResult.stopped || attemptResult.detached || Boolean(detachedReason) || Boolean(options.workflowChildPermitLaunch) || options.signal?.aborted,
+			interrupted: attemptResult.interrupted || options.interruptSignal?.aborted,
+			timedOut: attemptResult.timedOut,
+			toolBudgetExhausted: attemptResult.toolBudgetBlocked,
+			usageBudgetExhausted: false,
+			structuredOutputFailed: attemptResult.structuredOutputFailed,
+			acceptanceFailed: false,
+			currentTool: attemptResult.progress?.currentTool,
+			afterCompactionSettlement: (attemptResult as AbortRecoverySingleResult)[AFTER_COMPACTION_SETTLEMENT],
+		});
+		if (recovery.action === "resume") {
+			recoveryPrompt = recovery.prompt;
+			attemptNotes.push("[abort-recovery] compaction abort after useful progress; resuming the retained child session once on the same model.");
+			continue;
 		}
+		if (recovery.diagnostic) {
+			attemptResult.error = attemptResult.error ? `${attemptResult.error}\n${recovery.diagnostic}` : recovery.diagnostic;
+		}
+		break;
 	}
+	if (!lastResult) throw new Error("Subagent did not produce a result.");
+	if (isContextOverflow(lastResult.error)) lastResult.contextOverflow = true;
 
 	const result = withRunContext(lastResult ?? {
 		index: options.index ?? 0,
@@ -2104,10 +1955,7 @@ async function runSyncCompletionInner(
 	result.task = task;
 
 	result.usage = aggregateUsage;
-	result.attemptedModels = attemptedModels.length > 0 ? attemptedModels : undefined;
 	result.requestedModel = requestedModel;
-	result.skippedModels = skippedModels;
-	result.modelAttempts = modelAttempts.length > 0 ? modelAttempts : undefined;
 	result.progressSummary = {
 		...(childSessionName ? { sessionName: childSessionName } : {}),
 		toolCount: totalToolCount,

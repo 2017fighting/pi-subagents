@@ -208,7 +208,7 @@ For one run, use inline config:
 
 For persistent tweaks, edit `subagents.agentOverrides` in user or project settings. User overrides apply everywhere. Project overrides apply only in that repo and win over user overrides. Use `/subagents-models` or `subagent({ action: "models" })` to inspect the live mapping after settings and overrides load.
 
-Provider-scoped entries can layer on top of the default override for the active parent session provider. The provider is selected once from the parent model before child model fallback starts, so fallback attempts cannot switch configuration. Within each settings file, the provider entry wins per field; project settings still win over user settings.
+Provider-scoped entries can layer on top of the default override for the active parent session provider. The provider is selected once from the parent model. Within each settings file, the provider entry wins per field; project settings still win over user settings.
 
 ```json
 {
@@ -266,7 +266,6 @@ Direct settings example:
       "reviewer": {
         "model": "provider/strong-review-model",
         "thinking": "high",
-        "fallbackModels": ["backup-provider/strong-review-model"],
         "acceptanceRole": "read-only"
       }
     }
@@ -274,7 +273,7 @@ Direct settings example:
 }
 ```
 
-Useful override fields: `description`, `model`, `fallbackModels`, `thinking`,
+Useful override fields: `description`, `model`, `thinking`,
 `systemPromptMode`, `inheritProjectContext`, `inheritGlobalContext`, `inheritSkills`, `defaultContext`,
 `acceptanceRole`, `disabled`, `skills`, `tools`, `extensions`, and `systemPrompt`.
 `description` replaces the discovered description for builtin and custom agents
@@ -288,7 +287,7 @@ Keep the parent/orchestrator on the ordinary strong default model because omissi
 
 Examples are illustrative, not requirements. Map these tiers to concrete models in user/project settings or a profile. A non-OpenAI setup should choose comparable available models by capability.
 
-Use `fallbackModels` when a tier has provider quota or availability risk. Forked children keep their requested thinking level even when provider-specific reasoning blocks are stripped from the inherited transcript.
+Each child launch uses one resolved model exactly once. If quota or availability fails, surface that failure and let the parent or operator explicitly launch a later attempt with another model. Forked children keep their requested thinking level even when provider-specific reasoning blocks are stripped from the inherited transcript.
 
 If a provider rejects model IDs with thinking suffixes, use
 `subagents.disableThinking: true` in user or project settings to clear bundled

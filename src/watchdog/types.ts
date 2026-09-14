@@ -87,14 +87,12 @@ export interface WatchdogCadenceConfig {
 export interface WatchdogEndpointConfig {
 	enabled: boolean;
 	model?: string;
-	fallbackModels?: string[];
 	thinking?: string | false;
 }
 
 export interface WatchdogChildOverrideConfig {
 	enabled?: boolean;
 	model?: string;
-	fallbackModels?: string[];
 	thinking?: string | false;
 	cadence?: Partial<WatchdogCadenceConfig>;
 }

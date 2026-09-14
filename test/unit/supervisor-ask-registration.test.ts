@@ -20,7 +20,6 @@ import { DIRS, SUBAGENT_ASYNC_STARTED_EVENT } from "../../src/shared/types.ts";
 import { runSync } from "../../src/runs/foreground/execution.ts";
 import { setChildSessionFactory, type ChildSessionFactory, type ChildSessionLaunch, type ChildSessionEvent } from "../../src/runs/shared/child-session.ts";
 import { createEventBus, makeAgent } from "../support/helpers.ts";
-import { clearExclusions } from "../../src/runs/shared/model-exclusions.ts";
 import { buildInProcessChildLaunch } from "../../src/runs/shared/child-launch.ts";
 
 const createdChannels: string[] = [];
@@ -197,7 +196,6 @@ function captureSupervisorPolling(t: TestContext, allowedDirs: Set<string>) {
 describe("supervisor ask registration", () => {
 	for (const platform of ["darwin", "win32", "linux"] as const) {
 		it(`drains foreground and workflow progress completed between ticks exactly once (${platform})`, async (t) => {
-			clearExclusions();
 			const root = fs.mkdtempSync(path.join(os.tmpdir(), "nested-final-progress-"));
 			const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 			process.env.PI_CODING_AGENT_DIR = root;
@@ -333,7 +331,6 @@ describe("supervisor ask registration", () => {
 
 	for (const platform of ["darwin", "win32"] as const) {
 		it(`answers nested A → B → C asks through the child hooks and executor (${platform})`, { timeout: 15_000 }, async () => {
-			clearExclusions();
 			const root = fs.mkdtempSync(path.join(os.tmpdir(), "nested-supervisor-"));
 			const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 			process.env.PI_CODING_AGENT_DIR = root;

@@ -108,9 +108,7 @@ When a main watchdog model is configured (including a session override), recomme
 
 Omit `main.model` to inherit the session model and thinking level. A `main.model` without a thinking suffix or `main.thinking` runs with thinking off, so prefer `:high` for the strong pairing.
 
-Set `fallbackModels` in JSON settings on `main`, `children`, or `children.overrides.<agent>` to opt into an ordered fallback chain, for example `"fallbackModels": ["openai-codex/gpt-5.5:high"]`. Child overrides win over `children.fallbackModels`; neither inherits the main watchdog's chain. Arrays replace across user → project → session settings, and `[]` clears an inherited chain. Status shows configured chains.
-
-Unavailable configured candidates are skipped and resolved duplicates are tried once. Each attempt uses a fresh reviewer with its own model auth, provider stream, and thinking; an inherited primary keeps the actual session model/thinking, while fallbacks use explicit-model thinking rules. Fallback follows normal subagent provider-failure semantics (including rate limits, quota, auth, unavailability, and provider timeouts), **only before any tool work**, including read-only inspection. Clean/normal completion, length limits, findings, clarification, cancellation, and the overall watchdog deadline never trigger fallback. All attempts share the original deadline; exhaustion remains a failed review. With no fallback chain, existing single-model behavior is unchanged.
+The watchdog resolves one reviewer model and makes one review call. Unavailable models fail visibly; rate limits, quota, authentication, provider timeouts, findings, clarification, cancellation, and the overall watchdog deadline never switch models automatically. An inherited model keeps the current session model and thinking level.
 
 Agents can call `subagent({ action: "watchdog.recommend-model" })` and `subagent({ action: "watchdog.configure", model: "recommended", scope: "session" | "user" | "project" })`. They should use `scope: "session"` unless you ask for a lasting default.
 
@@ -140,7 +138,7 @@ Reviews retain the existing `agentEndTimeoutMs`. Questions and evidence are capp
 
 ## Child watchdogs
 
-Opt in under `subagents.watchdog.children`. `model`, `fallbackModels`, and `thinking` set the default child watchdog; `overrides.<agent>` can set `model`, `fallbackModels`, `thinking`, `enabled`, or `cadence` per role.
+Opt in under `subagents.watchdog.children`. `model` and `thinking` set the default child watchdog; `overrides.<agent>` can set `model`, `thinking`, `enabled`, or `cadence` per role.
 
 ## Launch rules
 

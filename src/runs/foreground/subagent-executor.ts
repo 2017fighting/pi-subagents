@@ -29,7 +29,7 @@ import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/
 import type { MainWatchdogRuntime } from "../../watchdog/runtime.ts";
 import { applyWatchdogLaunchRules } from "../../watchdog/rules.ts";
 import { childWatchdogProgressForModel } from "../../watchdog/child-status.ts";
-import { buildModelCandidates, normalizeParentModel, resolveEffectiveSubagentModel, resolveModelOrigin, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
+import { normalizeParentModel, resolveEffectiveSubagentModel, resolveModelOrigin, resolveModelSelection, type ModelOrigin, type ParentModel } from "../shared/model-resolution.ts";
 import { getHostBuiltinToolNames } from "../shared/child-tool-plan.ts";
 import { projectChainOutputSchemas, resolveEffectiveOutputSchema } from "../shared/child-launch-plan.ts";
 import { formatRetainedChildren, listRetainedChildren } from "../background/retained-children.ts";
@@ -2241,10 +2241,7 @@ async function resumeAsyncRun(input: {
 			...(completed.stopped ? { stopped: true } : {}),
 			...(completed.sessionFile ? { sessionFile: completed.sessionFile } : {}),
 			...(completed.model ? { model: completed.model } : {}),
-			...(completed.attemptedModels ? { attemptedModels: completed.attemptedModels } : {}),
 			...(completed.requestedModel ? { requestedModel: completed.requestedModel } : {}),
-			...(completed.skippedModels ? { skippedModels: completed.skippedModels } : {}),
-			...(completed.modelAttempts ? { modelAttempts: completed.modelAttempts } : {}),
 			...(completed.contextOverflow ? { contextOverflow: true } : {}),
 			...(completed.structuredOutput !== undefined ? { structuredOutput: completed.structuredOutput } : {}),
 			...(completed.structuredOutputPath ? { structuredOutputPath: completed.structuredOutputPath } : {}),
@@ -3258,10 +3255,7 @@ async function waitForWorkflowAsyncSingleResult(
 		...(completed.stopped ? { stopped: true } : {}),
 		...(completed.sessionFile ? { sessionFile: completed.sessionFile } : {}),
 		...(completed.model ? { model: completed.model } : {}),
-		...(completed.attemptedModels ? { attemptedModels: completed.attemptedModels } : {}),
 		...(completed.requestedModel ? { requestedModel: completed.requestedModel } : {}),
-		...(completed.skippedModels ? { skippedModels: completed.skippedModels } : {}),
-		...(completed.modelAttempts ? { modelAttempts: completed.modelAttempts } : {}),
 		...(completed.contextOverflow ? { contextOverflow: true } : {}),
 		...(completed.structuredOutput !== undefined ? { structuredOutput: completed.structuredOutput } : {}),
 		...(completed.structuredOutputPath ? { structuredOutputPath: completed.structuredOutputPath } : {}),

@@ -94,7 +94,6 @@ async function liveAvailableModels(ctx: ExtensionContext) {
 function buildBuiltinBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 	return {
 		...(agent.model !== undefined ? { model: agent.model } : {}),
-		...(agent.fallbackModels !== undefined ? { fallbackModels: [...agent.fallbackModels] } : {}),
 		...(agent.thinking !== undefined ? { thinking: agent.thinking } : {}),
 		systemPromptMode: agent.systemPromptMode,
 		inheritProjectContext: agent.inheritProjectContext,
@@ -195,7 +194,6 @@ function metadataFor(agent: AgentConfig): string {
 		lines.push(`Package: ${agent.packageName}`);
 	}
 	lines.push(`Model: ${agent.model ?? "default / inherit"}`);
-	if (agent.fallbackModels?.length) lines.push(`Fallback models: ${agent.fallbackModels.join(", ")}`);
 	if (agent.thinking !== undefined) lines.push(`Thinking: ${agent.thinking === false ? "off" : agent.thinking}`);
 	if (tools.length) lines.push(`Tools: ${tools.join(", ")}`);
 	if (agent.excludeTools?.length) lines.push(`Excluded tools: ${agent.excludeTools.join(", ")}`);

@@ -148,9 +148,9 @@ function stripThinkingSuffix(model: string): string {
 		: model;
 }
 
-function resolveFastModeExtension(input: Pick<ResolvePiLaunchToolPlanInput, "fast" | "model" | "modelCandidates" | "agentName">): string[] {
+function resolveFastModeExtension(input: Pick<ResolvePiLaunchToolPlanInput, "fast" | "model" | "agentName">): string[] {
 	if (!input.fast) return [];
-	const candidates = (input.modelCandidates?.length ? input.modelCandidates : input.model ? [input.model] : [])
+	const candidates = (input.model ? [input.model] : [])
 		.map(stripThinkingSuffix);
 	if (candidates.length === 0) {
 		throw new Error(`fast mode requires an explicit supported native OpenAI-Codex model${input.agentName ? ` for agent '${input.agentName}'` : ""}.`);
@@ -181,7 +181,6 @@ export interface ResolvePiLaunchToolPlanInput {
 		  };
 	fast?: boolean;
 	model?: string;
-	modelCandidates?: readonly string[];
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	inheritedCapabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	agentName?: string;
@@ -493,7 +492,7 @@ export function resolvePiLaunchToolPlan(
 			? resolvePermissionSystemExtension()
 			: undefined;
 	if (input.fast && capabilityCeiling?.denyExtensions) throw new Error("fast mode requires a child runtime extension, but this launch denies extensions.");
-	const fastModeExtensions = resolveFastModeExtension({ fast: input.fast, model: input.model, modelCandidates: input.modelCandidates, agentName: input.agentName });
+	const fastModeExtensions = resolveFastModeExtension({ fast: input.fast, model: input.model, agentName: input.agentName });
 	const runtimeExtensions = [
 		PROMPT_RUNTIME_EXTENSION_PATH,
 		...fastModeExtensions,

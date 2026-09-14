@@ -6,7 +6,6 @@ import type { MockPi } from "../support/helpers.ts";
 import { createEventBus, createMockPi, createTempDir, events, removeTempDir, resolveMockPiCallArgs, tryImport } from "../support/helpers.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
 import { ACTIVE_ASYNC_CAPACITY_DIR, acquireActiveAsyncCapacity, activeAsyncCapacitySessionKey } from "../../src/runs/background/active-async-capacity.ts";
-import { clearExclusions } from "../../src/runs/shared/model-exclusions.ts";
 import { DEFAULT_FORK_PREAMBLE, INTERCOM_DETACH_REQUEST_EVENT, SUBAGENT_ASYNC_STARTED_EVENT } from "../../src/shared/types.ts";
 
 interface ExecutorModule {
@@ -107,11 +106,9 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		tempDir = createTempDir("pi-subagent-fork-test-");
 		mockPi.reset();
 		mockPi.onCall({ output: "ok" });
-		clearExclusions();
 	});
 
 	afterEach(() => {
-		clearExclusions();
 		if (originalHome === undefined) delete process.env.HOME;
 		else process.env.HOME = originalHome;
 		if (originalUserProfile === undefined) delete process.env.USERPROFILE;
@@ -571,70 +568,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		assert.equal(entries.length, 2);
 		assert.ok(!entries.some((entry) => entry.type === "thinking_level_change"));
 	});
-
-	it("keeps thinking on every foreground fallback attempt after sanitizing inherited signed thinking", async () => {
-		mockPi.reset();
-		mockPi.onCall({
-			jsonl: [{
-				type: "message_end",
-				message: {
-					role: "assistant",
-					content: [{ type: "text", text: "temporary provider failure" }],
-					model: "openai/gpt-5-mini",
-					errorMessage: "rate limit exceeded",
-					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
-				},
-			}],
-			exitCode: 1,
-		});
-		mockPi.onCall({ output: "Recovered on fallback" });
-		const parentSessionFile = path.join(tempDir, "parent.jsonl");
-		const childSessionFile = path.join(tempDir, "fork-with-thinking.jsonl");
-		fs.writeFileSync(parentSessionFile, '{"type":"session","version":1,"id":"parent","timestamp":"2026-04-16T00:00:00.000Z","cwd":"/tmp"}\n', "utf-8");
-		const manager = {
-			getSessionId: () => "session-123",
-			getSessionFile: () => parentSessionFile,
-			getLeafId: () => "assistant-1",
-			openSession: () => ({
-				createBranchedSession: () => {
-					fs.writeFileSync(childSessionFile, [
-						{ type: "session", version: 1, id: "child", timestamp: "2026-04-16T00:00:00.000Z", cwd: "/tmp", parentSession: parentSessionFile },
-						{ type: "message", id: "assistant-1", parentId: null, timestamp: "2026-04-16T00:00:02.000Z", message: { role: "assistant", provider: "anthropic", api: "anthropic-messages", model: "anthropic/claude-sonnet-4-5", content: [{ type: "thinking", thinking: "private chain", thinkingSignature: "signed" }, { type: "text", text: "answer" }] } },
-					].map((entry) => JSON.stringify(entry)).join("\n") + "\n", "utf-8");
-					return childSessionFile;
-				},
-			}),
-		};
-		const executor = makeExecutorWithDiscoverAgents(() => ({
-			agents: [
-				{ name: "worker", description: "Worker", defaultContext: "fork", model: "openai/gpt-5-mini:high", fallbackModels: ["anthropic/claude-sonnet-4:low"], thinking: "high" },
-			],
-			projectAgentsDir: null,
-		}));
-
-		const ctx = {
-			...makeCtx(manager),
-			modelRegistry: {
-				getAvailable: () => [
-					{ provider: "openai", id: "gpt-5-mini", api: "openai-responses", reasoning: true },
-					{ provider: "anthropic", id: "claude-sonnet-4", api: "anthropic-messages", reasoning: true },
-				],
-			},
-		};
-		const result = await executor.execute(
-			"id",
-			{ agent: "worker", task: "test" },
-			new AbortController().signal,
-			undefined,
-			ctx,
-		);
-
-		assert.equal(result.isError, undefined);
-		const modelArgs = readAllCallArgs().map((args) => args[args.indexOf("--model") + 1]);
-		assert.deepEqual(modelArgs, ["openai/gpt-5-mini:high", "anthropic/claude-sonnet-4:low"]);
-	});
-
-	it("keeps requested thinking for non-Anthropic forked children without Anthropic fallbacks", async () => {
+	it("keeps requested thinking for non-Anthropic forked children", async () => {
 		mockPi.reset();
 		mockPi.onCall({ output: "done" });
 		const parentSessionFile = path.join(tempDir, "parent.jsonl");

@@ -13,6 +13,8 @@ Builtin agents inherit your current Pi default model. This keeps new installs fr
 
 Precedence, strongest first: per-run override → provider-scoped role override → `agentOverrides.<name>.model` → agent frontmatter `model` → `subagents.defaultModel` → the parent session model. A provider preference does not replace this order; it only resolves bare model ids when the active registry has more than one match. Fully qualified `provider/model` strings still win exactly.
 
+Each launch resolves one model. Provider errors, including HTTP 429 responses, are returned from that model rather than selecting another one. Separately, a verified compaction abort after useful progress may continue the retained child session once on the same resolved model; this lifecycle recovery preserves work and is not model fallback.
+
 Use `model: "inherit"` in agent frontmatter or `agentOverrides.<name>.model` to select the current parent session model explicitly.
 
 ## Setting defaults and overrides
@@ -57,7 +59,7 @@ To keep one role definition but configure it differently for work and personal p
 }
 ```
 
-The provider key comes from the active parent session model (or an explicit host `preferredProvider`) before fallback selection. Provider-scoped fields layer over the ordinary override in the same settings file; project settings still win over user settings. A fallback attempt does not switch the selected provider configuration.
+The provider key comes from the active parent session model (or an explicit host `preferredProvider`). Provider-scoped fields layer over the ordinary override in the same settings file; project settings still win over user settings.
 
 For one run, put the override in the command:
 
@@ -65,7 +67,7 @@ For one run, put the override in the command:
 /run reviewer[model=anthropic/claude-sonnet-4:high] "Review this diff"
 ```
 
-For a persistent role override with a backup model for provider failures:
+For a persistent role override:
 
 ```json
 {
@@ -73,8 +75,7 @@ For a persistent role override with a backup model for provider failures:
     "agentOverrides": {
       "reviewer": {
         "model": "anthropic/claude-sonnet-4",
-        "thinking": "high",
-        "fallbackModels": ["openai-codex/gpt-5.6-luna:low"]
+        "thinking": "high"
       }
     }
   }
@@ -87,7 +88,7 @@ For a persistent role override with a backup model for provider failures:
 
 Set `fast: true` on a run, in agent frontmatter, or in `subagents.agentOverrides.<name>.fast` to request the OpenAI priority service tier for supported native OpenAI-Codex children. This can use a higher quota tier or cost more. It is off by default.
 
-Fast mode fails before launch unless every resolved model candidate is on the allowlist. The current allowlist is `openai-codex/gpt-5.6-luna` and `openai-codex/gpt-5.6-sol`. External runners, Anthropic models, and other providers do not use fast mode.
+Fast mode fails before launch unless the resolved model is on the allowlist. The current allowlist is `openai-codex/gpt-5.6-luna` and `openai-codex/gpt-5.6-sol`. External runners, Anthropic models, and other providers do not use fast mode.
 
 ## Recommended model tiering (optional)
 
@@ -100,76 +101,7 @@ A setup that works well in practice: route agents by task shape instead of runni
 
 The routing rule: use the capability tiers (1–3) when the task is well-scoped, and the intent tier (4) when scoping or judging is the task itself.
 
-Give tier-4 agents `fallbackModels` for retryable provider/model failures such as rate-limit, overload, unavailable-model, and provider-reported timeout errors **before any tool activity**. After tool activity, failures remain terminal except for the narrow native read-only HTTP 429 continuation below; the task is never automatically replayed after tool work. Ordinary task failures and the outer run-level `timeoutMs` / `maxRuntimeMs` deadline do not trigger fallback.
-
-Fallback uses native Pi sessions, not fresh `pi` CLI processes. Even when an exact session file is reopened, normal fallback resubmits the original task; retained history alone does not make automatic continuation after tool work safe.
-
-Example fallback configuration:
-
-```yaml
----
-name: shaper
-description: Open-ended design/UX/product/planning agent for ambiguous tasks
-model: anthropic/claude-fable-5
-thinking: medium
-fallbackModels: openai-codex/gpt-5.5:high
----
-```
-
-One interaction worth knowing for tier 4: forked context over an Anthropic parent transcript strips the parent's signed thinking blocks from the child session, because a thinking signature cannot be replayed into a branch. The child still runs at its requested thinking level and reasons fresh from its first turn.
-
-### Native read-only continuation after HTTP 429
-
-A native foreground or background child can continue once on an eligible later `fallbackModels` entry after completed read-only tool work and an observed HTTP 429. This is not general mid-run fallback and does not apply to external runners. Current coverage is Pi SDK **0.85.1**, the configured **`baseten` / `openai-completions`** provider and its observed request path, not arbitrary providers, APIs, provider extensions, or error text containing “429”.
-
-Admission requires the default child factory's owned profile: an explicit allowlist containing only builtin `read` and/or `ls`, no ambient or custom extensions/tools or registered background-work providers, and verified idle settlement and shutdown. Wait, supervisor coordination, nested/fanout work, permissions/watchdogs, structured output, fast mode and configured tool budgets exclude this continuation on both hosts. A read-only role name or prompt alone is not enough; default coordinated profiles are excluded.
-
-Usage-budget admission differs by host:
-
-- **Foreground:** any configured usage budget, including a workflow-owned budget, denies continuation because this host does not certify remaining allowance.
-- **Native background:** an unexhausted token-only budget can qualify only when the run owner's authoritative ledger has received the current attempt's events and has complete coverage, including concurrent work. Configured cost budgets, missing/unknown usage, or unsupported external/import/dynamic coverage deny continuation. This does not introduce new accounting or renew allowances.
-
-The child must have an **exact assigned session file**: either valid persisted history or an initially absent assigned file that the SDK initializes and persists during this attempt. In-memory or directory-only storage is insufficient. A missing or changed checkpoint at handoff fails closed; recovery never repairs it or promotes storage. Normal executor launches assign the child file and pass it to the native host; lower-level directory-only launches remain ineligible. No new storage option is needed.
-
-The next model must resolve through the same configured provider runtime, have the same provider/API and a different, untried model identity, and pass conservative retained-input compatibility checks. Cross-provider candidates are skipped without launch; unknown resolution or unsupported/unknown capacity denies continuation. Both hosts reject images and unknown content; these are conservative checks, not exact token estimates:
-
-- **Foreground:** accepts text and supported assistant tool-call/result history. Its UTF-8 byte ceiling includes retained history, actual system prompt and tool definitions, 4096 bytes of framing/continuation headroom, and the candidate's full output allowance. Equal-window models can qualify if this bound fits.
-- **Native background:** resolves exact registry identities and accepts retained text, thinking and tool-call blocks. It reserves the entire source context window plus retained-context UTF-8 bytes and fixed-prompt bytes, and requires the candidate's positive output allowance to be no larger than the source's. Equal/smaller context windows therefore deny continuation; choose a sufficiently larger same-provider sibling.
-
-The sibling reopens the **same session/file**, preserving the original task, completed tool results and terminal provider error. Its new prompt is a fixed instruction to continue from those results without restarting or repeating completed work; it does not resubmit the original task. One recovery allowance is shared with compaction-abort recovery and consumed before sibling creation. Any sibling outcome ends recovery, including startup failure, abort or another 429; it cannot cascade into startup fallback or change model exclusions. Cancellation, stop/detach and the original run deadline remain authoritative and are rechecked at handoff. Newly billed attempt usage is aggregated, not historical usage restored from the file.
-
-For a deliberately non-coordinated reader, merge these existing keys into `~/.pi/agent/extensions/subagent/config.json` (see [configuration.md](configuration.md)):
-
-```json
-{
-  "waitTool": { "enabled": false },
-  "intercomBridge": { "mode": "off" }
-}
-```
-
-These settings affect other children too; do not disable required coordination just to obtain recovery. Define a custom agent using existing frontmatter (replace `model-a` and `model-b` with actual text-capable models in your configured Baseten catalog):
-
-```yaml
----
-name: reader
-description: Read-only file analysis without coordination
-tools: read, ls
-extensions:
-model: baseten/model-a
-fallbackModels: baseten/model-b
-systemPromptMode: append
-inheritProjectContext: false
-inheritGlobalContext: false
-inheritSkills: false
-allowNestedSubagents: false
-async: false
----
-Read the assigned files and return your findings without editing.
-```
-
-Launch with `subagent({ agent: "reader", task: "Read README.md and summarize it", async: false, context: "fresh", output: false })`. Keep `forceTopLevelAsync` disabled and omit tool/usage budgets and the excluded runtime features above. No new recovery flag is required: these settings make the profile eligible, but continuation still requires actual completed read-only work, observed 429 and all checkpoint/provider/lifecycle checks. This is a trusted-host compatibility boundary, not sandboxing or universal provider attestation.
-
-For native background execution, use the same call with `async: true`, which overrides the agent's foreground default. Keep the explicit empty `extensions:` field: omitting it allows ambient extensions in background children and does not certify this profile. Select a fallback model satisfying the stricter background capacity bound above; unconfigured budgets are simplest, while token-only budgets still require the authoritative allowance check. Do not disable needed coordination or ambient capabilities merely to obtain continuation.
+Each launch resolves one model and starts the child once. Provider, authentication, quota, rate-limit, stream, empty-response, context-overflow, and provisioning failures are returned from that attempt. To try another model, the parent or operator must issue a later explicit launch.
 
 ## Thinking level defaults
 
@@ -201,7 +133,7 @@ Set `subagents.maxThinking` to enforce a hard maximum for every native Pi child.
 }
 ```
 
-Requests above the ceiling fail before child startup; the setting covers frontmatter, `agentOverrides`, per-run overrides, fallback models, parallel/chain children, nested launches, and resumed children. Project settings take precedence over user settings. External runners retain their existing behavior.
+Requests above the ceiling fail before child startup; the setting covers frontmatter, `agentOverrides`, per-run overrides, parallel/chain children, nested launches, and resumed children. Project settings take precedence over user settings. External runners retain their existing behavior.
 
 ## Extension defaults
 
@@ -276,11 +208,11 @@ To keep subagents inside a budget or compliance profile, enforce a model scope. 
 - `agents.<name>` adds a second allow-list for that agent. The model must pass both the global list and the matching agent list, so an agent rule cannot weaken the global rule. Agent rules inherit `enforce` and `strict` when those fields are absent.
 - A top-level `enforce: true` with only agent allow-lists restricts only those named agents. Unknown names are allowed so settings can be shared across projects and machines.
 - Models you pass explicitly — the tool-call `model`, `--model`, or a clarify pick — error and abort the run.
-- By default, models from agent frontmatter, `subagents.defaultModel`, the inherited parent session model, or fallback chains only warn and remain available, so existing configurations keep working while you tighten the scope.
-- Set `strict: true` with `enforce: true` to reject every resolved out-of-scope model. This includes inherited models and fallback candidates. An invalid fallback fails the run instead of being removed from the candidate chain.
+- By default, models from agent frontmatter, `subagents.defaultModel`, or the inherited parent session model only warn and remain available, so existing configurations keep working while you tighten the scope.
+- Set `strict: true` with `enforce: true` to reject every resolved out-of-scope model, including inherited models.
 - `enforce: true` requires at least one non-empty global or agent `allow` list; otherwise the config is rejected at load time.
 
-Model scope is policy only. It rejects or warns; it does not select a cheaper model. Set `agentOverrides.worker.model` to choose a worker model and use `modelScope.agents.worker` to prevent a per-run override or fallback from escaping that restriction.
+Model scope is policy only. It rejects or warns; it does not select a cheaper model. Set `agentOverrides.worker.model` to choose a worker model and use `modelScope.agents.worker` to prevent a per-run override from escaping that restriction.
 
 `inherit` expands in the parent process at each launch. It is never sent to the child as a model id. A nested child therefore inherits its immediate parent's current model, not the original top-level model. If no parent model is available, an enforced `inherit` entry does not match and fails closed.
 

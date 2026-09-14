@@ -24,7 +24,6 @@ export interface RuntimeAgentDefinition {
 	allowNestedSubagents?: boolean;
 	mcpDirectTools?: readonly string[];
 	model?: string;
-	fallbackModels?: readonly string[];
 	thinking?: string | false;
 	systemPromptMode?: "append" | "replace";
 	inheritProjectContext?: boolean;
@@ -200,7 +199,7 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Runtime agent definition must be an object.");
 	const definition = value as Record<string, unknown>;
 	const supported = new Set([
-		"description", "systemPrompt", "aliases", "tools", "excludeTools", "allowNestedSubagents", "mcpDirectTools", "model", "fallbackModels", "thinking",
+		"description", "systemPrompt", "aliases", "tools", "excludeTools", "allowNestedSubagents", "mcpDirectTools", "model", "thinking",
 		"systemPromptMode", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "defaultContext", "defaultAsync", "defaultTimeoutMs",
 		"defaultToolTimeoutMs", "defaultAcceptance", "acceptanceRole", "runner", "machine", "skills", "skillPath",
 		"extensions", "subagentOnlyExtensions", "mutationTools", "output", "outputMode", "defaultReads", "defaultProgress", "interactive",
@@ -224,7 +223,7 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 	const allowNestedSubagents = validateBoolean(definition.allowNestedSubagents, "Runtime agent definition allowNestedSubagents");
 	const mcpDirectTools = validateStringList(definition.mcpDirectTools, "Runtime agent definition mcpDirectTools");
 	const model = validateOptionalString(definition.model, "Runtime agent definition model");
-	const fallbackModels = validateStringList(definition.fallbackModels, "Runtime agent definition fallbackModels");
+	if ((definition as Record<string, unknown>).fallbackModels !== undefined) throw new Error("Runtime agent definition fallbackModels was removed; configure one model instead.");
 	const inheritProjectContext = validateBoolean(definition.inheritProjectContext, "Runtime agent definition inheritProjectContext");
 	const inheritGlobalContext = validateBoolean(definition.inheritGlobalContext, "Runtime agent definition inheritGlobalContext");
 	const inheritSkills = validateBoolean(definition.inheritSkills, "Runtime agent definition inheritSkills");
@@ -256,7 +255,6 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 		...(allowNestedSubagents !== undefined ? { allowNestedSubagents } : {}),
 		...(mcpDirectTools ? { mcpDirectTools } : {}),
 		...(model ? { model } : {}),
-		...(fallbackModels ? { fallbackModels } : {}),
 		...(thinking !== undefined ? { thinking: thinking as string | false } : {}),
 		...(systemPromptMode !== undefined ? { systemPromptMode: systemPromptMode as "append" | "replace" } : {}),
 		...(inheritProjectContext !== undefined ? { inheritProjectContext } : {}),
@@ -337,7 +335,6 @@ function toAgentConfig(name: string, definition: RuntimeAgentDefinition): AgentC
 		...(definition.allowNestedSubagents !== undefined ? { allowNestedSubagents: definition.allowNestedSubagents } : {}),
 		...(definition.mcpDirectTools !== undefined ? { mcpDirectTools: [...definition.mcpDirectTools] } : {}),
 		...(definition.model !== undefined ? { model: definition.model } : {}),
-		...(definition.fallbackModels !== undefined ? { fallbackModels: [...definition.fallbackModels] } : {}),
 		...(definition.thinking !== undefined ? { thinking: definition.thinking } : {}),
 		systemPromptMode: definition.systemPromptMode ?? defaultSystemPromptMode(name),
 		inheritProjectContext: definition.inheritProjectContext ?? defaultInheritProjectContext(name),

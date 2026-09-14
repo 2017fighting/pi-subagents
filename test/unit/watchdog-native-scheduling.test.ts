@@ -8,7 +8,7 @@ import { Type } from "typebox";
 import { registerMainWatchdog } from "../../src/watchdog/register-main.ts";
 import { createMainWatchdogReview } from "../../src/watchdog/review.ts";
 
-// Same opt-in installed-SDK convention as readonly-session-evidence.test.ts.
+// Use the same opt-in installed-SDK convention as other native scheduling tests.
 // Real AgentSession + ExtensionRunner + ModelRuntime, with HTTP replaced only at fetch.
 const sdkRoot = process.env.PI_SUBAGENTS_NATIVE_SDK;
 it("native Pi delivers a yielded question and continues without a reply action or forced review", {

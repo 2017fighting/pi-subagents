@@ -52,7 +52,6 @@ interface AgentConfig {
 	defaultContext?: "fresh" | "fork";
 	systemPrompt?: string;
 	model?: string;
-	fallbackModels?: string[];
 	tools?: string[];
 	extensions?: string[];
 	subagentOnlyExtensions?: string[];

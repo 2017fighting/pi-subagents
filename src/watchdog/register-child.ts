@@ -22,7 +22,6 @@ export function childResolvedConfig(config: ChildWatchdogConfig): ResolvedWatchd
 		main: {
 			enabled: true,
 			...(config.model ? { model: config.model } : {}),
-			...(config.fallbackModels !== undefined ? { fallbackModels: [...config.fallbackModels] } : {}),
 			...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
 		},
 		stalemateRepeats: config.stalemateRepeats,

@@ -204,8 +204,8 @@ describe("async stale-run reconciliation", () => {
 				startedAt: 1000,
 				lastUpdate: 1000,
 				steps: [
-					{ agent: "scout", status: "running", startedAt: 1000, model: "planned-scout", attemptedModels: ["planned-scout"] },
-					{ agent: "worker", status: "running", startedAt: 1100, model: "planned-worker", attemptedModels: ["planned-worker"] },
+					{ agent: "scout", status: "running", startedAt: 1000, model: "planned-scout" },
+					{ agent: "worker", status: "running", startedAt: 1100, model: "planned-worker" },
 				],
 			});
 			const scoutSession = path.join(root, "scout.jsonl");
@@ -215,8 +215,8 @@ describe("async stale-run reconciliation", () => {
 				success: false,
 				state: "failed",
 				results: [
-					{ agent: "scout", success: true, sessionFile: scoutSession, model: "fast", attemptedModels: ["planned-scout", "fast"] },
-					{ agent: "worker", success: false, error: "boom", sessionFile: workerSession, model: "careful", attemptedModels: ["planned-worker", "careful"], contextOverflow: true },
+					{ agent: "scout", success: true, sessionFile: scoutSession, model: "fast" },
+					{ agent: "worker", success: false, error: "boom", sessionFile: workerSession, model: "careful", contextOverflow: true },
 				],
 			}, null, 2), "utf-8");
 
@@ -231,13 +231,11 @@ describe("async stale-run reconciliation", () => {
 			assert.equal(result.status?.steps?.[0]?.status, "complete");
 			assert.equal(result.status?.steps?.[0]?.exitCode, 0);
 			assert.equal(result.status?.steps?.[0]?.model, "fast");
-			assert.deepEqual(result.status?.steps?.[0]?.attemptedModels, ["planned-scout", "fast"]);
 			assert.equal(result.status?.steps?.[0]?.sessionFile, scoutSession);
 			assert.equal(result.status?.steps?.[1]?.status, "failed");
 			assert.equal(result.status?.steps?.[1]?.exitCode, 1);
 			assert.equal(result.status?.steps?.[1]?.error, "boom");
 			assert.equal(result.status?.steps?.[1]?.model, "careful");
-			assert.deepEqual(result.status?.steps?.[1]?.attemptedModels, ["planned-worker", "careful"]);
 			assert.equal(result.status?.steps?.[1]?.contextOverflow, true);
 			assert.equal(result.status?.steps?.[1]?.sessionFile, workerSession);
 			assert.equal(result.status?.error, "boom");

@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { normalizeModelSegment, resolveModelCandidate } from "../runs/shared/model-fallback.ts";
+import { normalizeModelSegment, resolveModelCandidate } from "../runs/shared/model-resolution.ts";
 import type { WatchdogEndpointConfig } from "./types.ts";
 import {
 	getSupportedThinkingLevels,

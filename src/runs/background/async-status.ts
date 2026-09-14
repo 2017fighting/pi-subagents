@@ -68,8 +68,6 @@ interface AsyncRunStepSummary {
 	contextLimit?: number;
 	thinking?: string;
 	requestedModel?: string;
-	skippedModels?: import("../../shared/types.ts").SkippedModel[];
-	attemptedModels?: string[];
 	sessionFile?: string;
 	transcriptPath?: string;
 	error?: string;
@@ -370,9 +368,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 			...(step.contextLimit !== undefined ? { contextLimit: step.contextLimit } : {}),
 			...(step.thinking ? { thinking: step.thinking } : {}),
 			...(step.thinkingCeiling ? { thinkingCeiling: step.thinkingCeiling } : {}),
-			...(step.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
 			...(step.requestedModel ? { requestedModel: step.requestedModel } : {}),
-			...(step.skippedModels ? { skippedModels: step.skippedModels } : {}),
 			...(step.sessionFile ? { sessionFile: step.sessionFile } : {}),
 			...(step.transcriptPath ? { transcriptPath: step.transcriptPath } : {}),
 			...(step.error ? { error: step.error } : {}),

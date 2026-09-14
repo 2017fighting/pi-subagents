@@ -7,9 +7,8 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { discoverAgentsAll } from "../../src/agents/agents.ts";
 import { handleCreate } from "../../src/agents/agent-management.ts";
 import { clearSkillCache, discoverAvailableSkills, resolveSkillPath } from "../../src/agents/skills.ts";
-import { applyModelExclusionsConfig, loadConfig, resolveModelExclusionTTL, updateConfig } from "../../src/extension/config.ts";
+import { loadConfig, updateConfig } from "../../src/extension/config.ts";
 import { diagnoseIntercomBridge, resolveIntercomBridge } from "../../src/intercom/intercom-bridge.ts";
-import { DEFAULT_MODEL_EXCLUSION_TTL_MS, MAX_MODEL_EXCLUSION_TTL_MS, clearExclusions, flushPersist, recordModelFailure, reloadFromDisk } from "../../src/runs/shared/model-exclusions.ts";
 import { loadRunsForAgent, recordRun } from "../../src/runs/shared/run-history.ts";
 import { cleanupAllArtifactDirs, getArtifactsDir, getProjectArtifactsDir } from "../../src/shared/artifacts.ts";
 import { TEMP_ARTIFACTS_DIR } from "../../src/shared/types.ts";
@@ -333,38 +332,18 @@ Package skill content.
 		}
 	});
 
-	it("loads and applies model exclusion TTL config", () => {
+	it("rejects removed model exclusion config without creating a store", () => {
 		const configPath = path.join(agentDir, "extensions", "subagent", "config.json");
 		const exclusionPath = path.join(tempDir, "model-exclusions.json");
-		const previousExclusionPath = process.env.PI_MODEL_EXCLUSIONS_PATH;
-		process.env.PI_MODEL_EXCLUSIONS_PATH = exclusionPath;
-		try {
-			writeFile(configPath, JSON.stringify({ modelExclusions: { defaultTtlMs: 300_000 } }));
-			const config = loadConfig();
-			assert.equal(config.modelExclusions?.defaultTtlMs, 300_000);
-			assert.equal(resolveModelExclusionTTL(config), 300_000);
-			assert.equal(resolveModelExclusionTTL({}), DEFAULT_MODEL_EXCLUSION_TTL_MS);
+		writeFile(configPath, JSON.stringify({ modelExclusions: { defaultTtlMs: 300_000 } }));
+		assert.throws(() => updateConfig((current) => current), /modelExclusions was removed/);
+		assert.equal(fs.existsSync(exclusionPath), false);
+	});
 
-			applyModelExclusionsConfig(config);
-			reloadFromDisk();
-			recordModelFailure({ modelId: "gpt-5", provider: "openai", reason: "test" });
-			const entry = (JSON.parse(fs.readFileSync(exclusionPath, "utf-8")).exclusions as Array<{ recordedAt: number; expiresAt: number }>)[0];
-			assert.ok(entry);
-			assert.equal(entry.expiresAt - entry.recordedAt, 300_000);
-
-			for (const invalidTtl of [0, -1, MAX_MODEL_EXCLUSION_TTL_MS + 1, "300000", true, null]) {
-				writeFile(configPath, JSON.stringify({ modelExclusions: { defaultTtlMs: invalidTtl } }));
-				assert.throws(() => updateConfig((current) => current), /config\.modelExclusions\.defaultTtlMs must be a finite positive number/);
-			}
-		} finally {
-			clearExclusions();
-			flushPersist();
-			reloadFromDisk();
-			applyModelExclusionsConfig({});
-			if (previousExclusionPath === undefined) delete process.env.PI_MODEL_EXCLUSIONS_PATH;
-			else process.env.PI_MODEL_EXCLUSIONS_PATH = previousExclusionPath;
-			fs.rmSync(exclusionPath, { force: true });
-		}
+	it("fails closed when loadConfig reads removed model exclusion config", () => {
+		const configPath = path.join(agentDir, "extensions", "subagent", "config.json");
+		writeFile(configPath, JSON.stringify({ modelExclusions: { defaultTtlMs: 300_000 }, asyncByDefault: false }));
+		assert.throws(() => loadConfig(), /config\.modelExclusions was removed/);
 	});
 
 	it("rejects invalid artifactDir config values", () => {

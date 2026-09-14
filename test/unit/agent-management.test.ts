@@ -77,7 +77,6 @@ describe("agent management config parsing", () => {
 			"aliases: capability",
 			"tools: read, grep, mcp:github/search",
 			"model: openai/gpt-5-mini",
-			"fallbackModels: openai/gpt-5-mini-fallback",
 			"async: true",
 			"timeoutMs: 123",
 			"thinking: high",
@@ -127,7 +126,7 @@ describe("agent management config parsing", () => {
 		assert.ok(row);
 		assert.equal(row.executable, true);
 		assert.deepEqual(row.tools, { ambient: false, names: ["read", "grep"], mcpDirectTools: ["github/search"], mutationTools: ["edit", "write"] });
-		assert.deepEqual(row.model, { value: "openai/gpt-5-mini", fallbackModels: ["openai/gpt-5-mini-fallback"], thinking: "high" });
+		assert.deepEqual(row.model, { value: "openai/gpt-5-mini", thinking: "high" });
 		assert.deepEqual(row.execution, { defaultAsync: true, timeoutMs: 123 });
 		assert.deepEqual(row.acceptance, {
 			policy: {
@@ -1545,7 +1544,6 @@ Drive the failing test first.
 				agentOverrides: {
 					implementer: {
 						thinking: "high",
-						fallbackModels: ["openai/gpt-5-mini"],
 						tools: ["bash"],
 						skills: ["override-skill"],
 						defaultContext: "fork",
@@ -1558,7 +1556,6 @@ Drive the failing test first.
 		fs.writeFileSync(agentPath, `---
 name: implementer
 description: TDD implementer
-fallbackModels:
 thinking: off
 tools:
 skills:
@@ -1584,7 +1581,6 @@ Drive the failing test first.
 
 		const content = fs.readFileSync(agentPath, "utf-8");
 		assert.match(content, /^description: Updated implementer$/m);
-		assert.match(content, /^fallbackModels: ?$/m);
 		assert.match(content, /^thinking: off$/m);
 		assert.match(content, /^tools: ?$/m);
 		assert.match(content, /^skills: ?$/m);
@@ -1649,21 +1645,20 @@ Drive the failing test first.
 			version: "1.2.3",
 			pi: { subagents: { agents: ["agents"] } },
 		}));
-		const writeAgent = (dir: string, name: string, model: string, thinking: string, fallback: string) => fs.writeFileSync(path.join(dir, `${name}.md`), [
+		const writeAgent = (dir: string, name: string, model: string, thinking: string) => fs.writeFileSync(path.join(dir, `${name}.md`), [
 			"---",
 			`name: ${name}`,
 			`description: ${name} model mapping`,
 			`model: ${model}`,
 			`thinking: ${thinking}`,
-			`fallbackModels: ${fallback}`,
 			"---",
 			"Model mapping test agent.",
 		].join("\n"));
-		writeAgent(path.join(packageDir, "agents"), "package-worker", "anthropic/claude-sonnet-4", "low", "openai/gpt-5-mini");
-		writeAgent(userAgentsDir, "user-worker", "gpt-5-mini", "medium", "claude-sonnet-4");
-		writeAgent(userAgentsDir, "shadowed", "openai/gpt-5-mini", "low", "anthropic/claude-sonnet-4");
-		writeAgent(projectAgentsDir, "project-worker", "anthropic/claude-sonnet-4", "high", "openai/gpt-5-mini");
-		writeAgent(projectAgentsDir, "shadowed", "openai/gpt-5-mini", "high", "anthropic/claude-sonnet-4");
+		writeAgent(path.join(packageDir, "agents"), "package-worker", "anthropic/claude-sonnet-4", "low");
+		writeAgent(userAgentsDir, "user-worker", "gpt-5-mini", "medium");
+		writeAgent(userAgentsDir, "shadowed", "openai/gpt-5-mini", "low");
+		writeAgent(projectAgentsDir, "project-worker", "anthropic/claude-sonnet-4", "high");
+		writeAgent(projectAgentsDir, "shadowed", "openai/gpt-5-mini", "high");
 		fs.writeFileSync(path.join(projectAgentsDir, "off-worker.md"), [
 			"---",
 			"name: off-worker",
@@ -1687,7 +1682,7 @@ Drive the failing test first.
 		const result = handleManagementAction("models", {}, ctx);
 		const text = readText(result);
 		assert.equal(result.isError, false);
-		assert.match(text, /package-worker\n  model:\n    anthropic\/claude-sonnet-4\n  source: package agent config\n  thinking: low\n  fallback models:\n    openai\/gpt-5-mini/);
+		assert.match(text, /package-worker\n  model:\n    anthropic\/claude-sonnet-4\n  source: package agent config\n  thinking: low/);
 		assert.match(text, /user-worker\n  model:\n    openai\/gpt-5-mini\n  source: user agent config\n  thinking: medium/);
 		assert.match(text, /project-worker\n  model:\n    anthropic\/claude-sonnet-4\n  source: project agent config\n  thinking: high/);
 		assert.match(text, /off-worker\n  model:\n    openai\/gpt-5-mini\n  source: project agent config\n  thinking: off/);

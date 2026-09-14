@@ -120,159 +120,18 @@ function request(config: ResolvedWatchdogConfig, warnings: WatchdogWarning[]): W
 }
 
 describe("main watchdog review adapter", () => {
-	it("keeps the runtime deadline authoritative during fallback setup and displays configured chains", async () => {
-		const a = model("mock", "a");
-		const b = model("mock", "b");
-		const ctx = createCtx({ current: a, models: [a, b] });
-		let release!: () => void;
-		const pending = new Promise<void>((resolve) => { release = resolve; });
-		const registry = (ctx as any).modelRegistry;
-		const getAuth = registry.getApiKeyAndHeaders;
-		registry.getApiKeyAndHeaders = async (entry: Model<any>) => {
-			if (entry.id === "b") await pending;
-			return getAuth(entry);
-		};
-		const { streamFn, calls } = createStreamFn([fauxAssistantMessage("", { stopReason: "error", errorMessage: "rate limit" })]);
-		const config = enabledConfig({ fallbackModels: ["mock/b"] });
-		config.agentEndTimeoutMs = 10;
-		config.lsp.enabled = false;
-		config.children.fallbackModels = ["mock/a"];
-		config.children.overrides.worker = { fallbackModels: [] };
-		const review = createMainWatchdogReview(ctx, { streamFn });
-		let reviewDone: ReturnType<typeof review>;
-		const runtime = new MainWatchdogRuntime({ resolveConfig: () => ({ ok: true, config, errors: [], sources: [] }), review: (req) => reviewDone = review(req) });
-		try {
-			runtime.enqueueDelta("Assistant changed a file");
-			await runtime.handleAgentEnd({}, ctx);
-			assert.equal(runtime.getSnapshot().status, "stale");
-			release();
-			assert.equal((await reviewDone!)?.stopReason, "aborted");
-			assert.deepEqual(calls.map((call) => call.model.id), ["a"]);
-			const status = buildWatchdogStatus(runtime.getSnapshot(), ctx);
-			assert.match(status, /Main model: .*fallbacks mock\/b/);
-			assert.match(status, /Children: .*fallbacks mock\/a.*worker.*fallbacks none/);
-		} finally {
-			release();
-			runtime.reset("cleanup");
-		}
-	});
-
-	it("retries ordered provider failures with fresh model-specific context and deduplicated candidates", async () => {
-		const primary = model("first", "a");
-		const fallback = model("second", "b");
-		const calls: Array<{ model: Model<any>; context: Context; options?: SimpleStreamOptions }> = [];
-		const streamFn: StreamFn = (nextModel, context, options) => {
-			calls.push({ model: nextModel, context: { ...context, messages: [...context.messages] }, options });
-			return responseStream(fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 quota exceeded" }));
-		};
-		const ctx = createCtx({ current: primary, models: [fallback], authenticated: ["first/a", "second/b"], thinkingLevel: "high" });
-		// Both provider registrations are resolved separately; no generic stream override.
-		const providers: string[] = [];
-		(ctx as any).modelRegistry.getRegisteredProviderConfig = (provider: string) => ({ api: "faux", streamSimple: (...args: Parameters<StreamFn>) => {
-			providers.push(provider);
-			return streamFn(...args);
-		} });
-		const result = await createMainWatchdogReview(ctx)(request(enabledConfig({ fallbackModels: ["first/a", "second/b:low", "second/b:low"] }), []));
-		assert.equal(result?.stopReason, "error", "exhaustion must not become clean success");
-		assert.deepEqual(calls.map((call) => call.model), [primary, fallback]);
-		assert.deepEqual(providers, ["first", "second"]);
-		assert.equal(calls[0].model, primary, "inherited primary retains session model identity");
-		assert.deepEqual(calls.map((call) => call.options?.reasoning), ["high", "low"]);
-		assert.deepEqual(calls.map((call) => call.options?.apiKey), ["key-first-a", "key-second-b"]);
-		assert.deepEqual(calls.map((call) => call.options?.headers?.["x-model"]), ["a", "b"]);
-		assert.deepEqual(calls.map((call) => call.options?.env?.WATCHDOG_PROVIDER), ["first", "second"]);
-		assert.deepEqual(calls.map((call) => call.context.messages.length), [1, 1]);
-	});
-
-	it("skips an unavailable configured primary and retries a provider timeout", async () => {
+	it("returns a provider failure after one model launch", async () => {
 		const a = model("mock", "a");
 		const b = model("mock", "b");
 		const { streamFn, calls } = createStreamFn([
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider timeout" }),
-			fauxAssistantMessage("", { stopReason: "stop" }),
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "rate limit" }),
+			fauxAssistantMessage("unexpected second launch", { stopReason: "stop" }),
 		]);
-		const result = await createMainWatchdogReview(createCtx({ current: a, models: [a, b] }), { streamFn })(request(enabledConfig({ model: "missing/model", fallbackModels: ["mock/a", "mock/b"] }), []));
-		assert.equal(result?.stopReason, "stop");
-		assert.deepEqual(calls.map((call) => call.model.id), ["a", "b"]);
+		const result = await createMainWatchdogReview(createCtx({ current: a, models: [a, b] }), { streamFn })(request(enabledConfig(), []));
+		assert.equal(result.stopReason, "error");
+		assert.equal(result.errorMessage, "rate limit");
+		assert.equal(calls.length, 1);
 	});
-
-	it("retries OpenRouter's 401 on the configured cross-provider fallback", async () => {
-		const a = model("openrouter", "a");
-		const b = model("second", "b");
-		const { streamFn, calls } = createStreamFn([
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: '401: {"message":"User not found.","code":401}' }),
-			fauxAssistantMessage("", { stopReason: "stop" }),
-		]);
-		const result = await createMainWatchdogReview(createCtx({ current: a, models: [a, b] }), { streamFn })(request(enabledConfig({ fallbackModels: ["second/b"] }), []));
-		assert.equal(result?.stopReason, "stop");
-		assert.deepEqual(calls.map((call) => call.model), [a, b]);
-	});
-
-	it("does not retry context overflow even when the provider error also says upstream", async () => {
-		const a = model("mock", "a");
-		const b = model("mock", "b");
-		const { streamFn, calls } = createStreamFn([
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "upstream: maximum context length exceeded" }),
-		]);
-		const result = await createMainWatchdogReview(createCtx({ current: a, models: [a, b] }), { streamFn })(request(enabledConfig({ fallbackModels: ["mock/b"] }), []));
-		assert.deepEqual(calls.map((call) => call.model.id), ["a"]);
-		assert.equal(result?.stopReason, "error");
-		assert.equal(result?.errorMessage, "upstream: maximum context length exceeded");
-	});
-
-	it("does not retry normal, length, aborted, or unclassified error outcomes", async () => {
-		const a = model("mock", "a");
-		const b = model("mock", "b");
-		for (const stopReason of ["stop", "length", "aborted", "error"] as const) {
-			const { streamFn, calls } = createStreamFn([fauxAssistantMessage("", { stopReason, errorMessage: stopReason === "error" ? "invalid request" : "provider timeout" })]);
-			const result = await createMainWatchdogReview(createCtx({ current: a, models: [a, b] }), { streamFn })(request(enabledConfig({ fallbackModels: ["mock/b"] }), []));
-			assert.equal(result?.stopReason, stopReason);
-			assert.equal(calls.length, 1);
-		}
-	});
-
-	it("does not retry provider errors after inspection or warnings, even rejected warnings", async () => {
-		const a = model("mock", "a");
-		const b = model("mock", "b");
-		for (const toolCall of [fauxToolCall("ls", { path: "." }), fauxToolCall("watchdog_warn", { severity: "concern", summary: "Concern", evidence: "Evidence", recommendedAction: "Fix" })]) {
-			let inspections = 0;
-			const { streamFn, calls } = createStreamFn([
-				fauxAssistantMessage(toolCall, { stopReason: "toolUse" }),
-				fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider unavailable" }),
-			]);
-			const result = await createMainWatchdogReview(createCtx({ current: a, models: [a, b] }), {
-				streamFn,
-				createReadOnlyTools: () => [{ name: "ls", label: "ls", description: "List files", parameters: Type.Object({ path: Type.String() }), execute: async () => {
-					inspections++;
-					return { content: [{ type: "text", text: "file.ts" }], details: {} };
-				} }],
-			})({ ...request(enabledConfig({ fallbackModels: ["mock/b"] }), []), emitWarning: () => false });
-			assert.equal(result?.stopReason, "error");
-			assert.deepEqual(calls.map((call) => call.model.id), ["a", "a"]);
-			assert.equal(inspections, toolCall.name === "ls" ? 1 : 0);
-		}
-	});
-
-	it("retries pre-stream auth failure but never advances after request cancellation during setup", async () => {
-		const a = model("mock", "a");
-		const b = model("mock", "b");
-		for (const cancel of [false, true]) {
-			const controller = new AbortController();
-			const ctx = createCtx({ current: a, models: [a, b] });
-			const registry = (ctx as any).modelRegistry;
-			const getAuth = registry.getApiKeyAndHeaders;
-			registry.getApiKeyAndHeaders = async (entry: Model<any>) => {
-				if (entry.id !== "a") return getAuth(entry);
-				if (cancel) controller.abort();
-				return { ok: false, error: "token expired" };
-			};
-			const { streamFn, calls } = createStreamFn([]);
-			const result = await createMainWatchdogReview(ctx, { streamFn })({ ...request(enabledConfig({ fallbackModels: ["mock/b"] }), []), signal: controller.signal });
-			assert.equal(result?.stopReason, cancel ? "aborted" : "stop");
-			assert.deepEqual(calls.map((call) => call.model.id), cancel ? [] : ["b"]);
-		}
-	});
-
 	it("yields an ask from a mixed batch without another model call or warning", async () => {
 		const { streamFn, calls } = createStreamFn([fauxAssistantMessage([
 			fauxToolCall("watchdog_ask", { question: "Which constraint applies?", evidence: "Two scope statements differ." }),
@@ -282,7 +141,7 @@ describe("main watchdog review adapter", () => {
 		const warnings: WatchdogWarning[] = [];
 		const current = model("mock", "review");
 		const review = createMainWatchdogReview(createCtx({ current, models: [current, model("mock", "fallback")] }), { streamFn });
-		const result = await review({ ...request(enabledConfig({ fallbackModels: ["mock/fallback"] }), warnings), allowClarification: true });
+		const result = await review({ ...request(enabledConfig(), warnings), allowClarification: true });
 		assert.deepEqual(result, { clarification: { question: "Which constraint applies?", evidence: "Two scope statements differ." } });
 		assert.equal(calls.length, 1);
 		assert.deepEqual(warnings, []);

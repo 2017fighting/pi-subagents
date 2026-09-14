@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { TextContent } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { resolveModelCandidate } from "../runs/shared/model-fallback.ts";
+import { resolveModelCandidate } from "../runs/shared/model-resolution.ts";
 import { splitKnownThinkingSuffix, toModelInfo } from "./model-info.ts";
 import type { ForkContextConfig } from "./types.ts";
 

@@ -63,16 +63,11 @@ function mainThinkingLine(snapshot: ReturnType<MainWatchdogRuntime["getSnapshot"
 }
 
 function mainModelLine(snapshot: ReturnType<MainWatchdogRuntime["getSnapshot"]>, ctx: ExtensionContext): string {
-	const fallbacks = fallbackLine(snapshot.config.main.fallbackModels);
 	if (snapshot.config.main.model) {
 		const source = snapshot.sessionModelOverride?.model ? "session override" : "configured";
-		return `Main model: ${splitKnownThinkingSuffix(snapshot.config.main.model).baseModel} (${source})${fallbacks}`;
+		return `Main model: ${splitKnownThinkingSuffix(snapshot.config.main.model).baseModel} (${source})`;
 	}
-	return `Main model: ${currentSessionModelLine(ctx)}${fallbacks}`;
-}
-
-function fallbackLine(models: string[] | undefined): string {
-	return models === undefined ? "" : ` · fallbacks ${models.length ? models.join(" → ") : "none"}`;
+	return `Main model: ${currentSessionModelLine(ctx)}`;
 }
 
 function childrenLine(snapshot: ReturnType<MainWatchdogRuntime["getSnapshot"]>): string {
@@ -85,12 +80,11 @@ function childrenLine(snapshot: ReturnType<MainWatchdogRuntime["getSnapshot"]>):
 			const bits = [agent];
 			if (override.enabled !== undefined) bits.push(boolLabel(override.enabled));
 			if (override.model) bits.push(splitKnownThinkingSuffix(override.model).baseModel);
-			if (override.fallbackModels !== undefined) bits.push(fallbackLine(override.fallbackModels));
 			if (override.thinking !== undefined) bits.push(`thinking ${override.thinking === false ? "off" : override.thinking}`);
 			return bits.join(" ");
 		}).join("; ")}`
 		: "";
-	return `Children: ${boolLabel(snapshot.config.enabled && children.enabled)} · model ${model}${fallbackLine(children.fallbackModels)} · thinking ${thinking}${overrideText}`;
+	return `Children: ${boolLabel(snapshot.config.enabled && children.enabled)} · model ${model} · thinking ${thinking}${overrideText}`;
 }
 
 function recommendationLine(snapshot: ReturnType<MainWatchdogRuntime["getSnapshot"]>, ctx: ExtensionContext): string {

@@ -75,7 +75,7 @@ const hostArgs = ["/stage/pi-native", "--no-extensions", "--no-skills", "--no-pr
 console.log(`Artifacts: ${root}`);
 if (mode === "bootstrap-errors") {
 	const nativeStep = {
-		agent: "binary-smoke", task: "Return the scripted response.", context: "fresh", model: "standalone-smoke/local", modelCandidates: ["standalone-smoke/local"],
+		agent: "binary-smoke", task: "Return the scripted response.", context: "fresh", model: "standalone-smoke/local",
 		tools: [], extensions: ["/stage/package/test/smoke/standalone-provider.ts"], completionGuard: false,
 		inheritProjectContext: false, inheritGlobalContext: false, inheritSkills: false,
 	};

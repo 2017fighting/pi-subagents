@@ -21,7 +21,6 @@ import { ACTIVE_ASYNC_CAPACITY_DIR, acquireActiveAsyncCapacity, activeAsyncCapac
 import { readPendingChainAppendRequests } from "../../src/runs/background/chain-append.ts";
 import { createRunFanoutBudget, getRunFanoutBudgetSnapshot, writeRunFanoutBudgetDescriptor } from "../../src/runs/shared/run-fanout-budget.ts";
 import { deriveForkPromptCacheKey } from "../../src/runs/shared/child-tool-plan.ts";
-import { clearExclusions, recordModelFailure } from "../../src/runs/shared/model-exclusions.ts";
 import type { AsyncExecutionResult, AsyncResultPayload, AsyncStatusPayload } from "../support/async-execution-fixture.ts";
 import {
 	installAsyncExecutionHooks, waitForMockPiRuntime, available, isAsyncAvailable,
@@ -81,109 +80,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const payload = JSON.parse(fs.readFileSync(await waitForAsyncResultFile(id), "utf-8"));
 		assert.equal(payload.success, false);
 		assert.match(payload.results[0]?.error ?? "", /Subagent produced no output after terminal assistant stopReason "aborted"\./u);
-		assert.equal(payload.results[0]?.modelAttempts?.length, 1);
 		assert.equal(mockPi.callCount(), 1);
-	});
-
-	it("background single thinking override replaces primary and fallback suffixes", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
-		mockPi.onCall({
-			jsonl: [{
-				type: "message_end",
-				message: {
-					role: "assistant",
-					content: [{ type: "text", text: "primary failed" }],
-					model: "openai/gpt-5-mini",
-					errorMessage: "rate limit exceeded",
-					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
-				},
-			}],
-			exitCode: 1,
-		});
-		mockPi.onCall({ output: "Recovered asynchronously" });
-		const id = `async-fallback-thinking-off-${Date.now().toString(36)}`;
-		const run = executeAsyncSingle(id, {
-			agent: "worker",
-			task: "Do work",
-			agentConfig: makeAgent("worker", {
-				model: "openai/gpt-5-mini:high",
-				fallbackModels: ["anthropic/claude-sonnet-4:low"],
-				thinking: "high",
-			}),
-			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
-			availableModels: [
-				{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
-				{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
-			],
-			artifactConfig: {
-				enabled: false,
-				includeInput: false,
-				includeOutput: false,
-				includeJsonl: false,
-				includeMetadata: false,
-				cleanupDays: 7,
-			},
-			shareEnabled: false,
-			sessionRoot: path.join(tempDir, "sessions"),
-			thinkingOverride: "off",
-			maxSubagentDepth: 2,
-		});
-
-		assert.equal(run.details.asyncId, id);
-		const resultPath = await waitForAsyncResultFile(id);
-		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const firstArgs = readMockPiArgs(mockPi, 0);
-		const secondArgs = readMockPiArgs(mockPi, 1);
-		assert.equal(payload.success, true);
-		assert.equal(payload.results[0].model, "anthropic/claude-sonnet-4:off");
-		assert.deepEqual(payload.results[0].attemptedModels, ["openai/gpt-5-mini:off", "anthropic/claude-sonnet-4:off"]);
-		assert.equal(firstArgs[firstArgs.indexOf("--model") + 1], "openai/gpt-5-mini:off");
-		assert.equal(secondArgs[secondArgs.indexOf("--model") + 1], "anthropic/claude-sonnet-4:off");
-	});
-
-	it("background runs retry fallback models when a zero-exit attempt has empty output", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
-		mockPi.onCall({
-			jsonl: [{
-				type: "message_end",
-				message: {
-					role: "assistant",
-					content: [{ type: "text", text: "" }],
-					model: "openai/gpt-5-mini",
-					stopReason: "error",
-					usage: { input: 10, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
-				},
-			}],
-			exitCode: 0,
-		});
-		mockPi.onCall({ output: "Recovered asynchronously from empty output" });
-		const id = `async-empty-output-fallback-${Date.now().toString(36)}`;
-		executeAsyncSingle(id, {
-			agent: "worker",
-			task: "Do work",
-			agentConfig: makeAgent("worker", {
-				model: "openai/gpt-5-mini",
-				fallbackModels: ["anthropic/claude-sonnet-4"],
-			}),
-			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
-			artifactConfig: {
-				enabled: false,
-				includeInput: false,
-				includeOutput: false,
-				includeJsonl: false,
-				includeMetadata: false,
-				cleanupDays: 7,
-			},
-			shareEnabled: false,
-			maxSubagentDepth: 2,
-		});
-
-		const resultPath = await waitForAsyncResultFile(id);
-		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		assert.equal(payload.success, true);
-		assert.equal(payload.results[0]?.model, "anthropic/claude-sonnet-4");
-		assert.match(payload.results[0]?.output ?? "", /Recovered asynchronously from empty output/);
-		assert.match(payload.results[0]?.modelAttempts?.[0]?.error ?? "", /no output/i);
-		assert.deepEqual(payload.results[0]?.modelAttempts?.map((attempt) => attempt.success), [false, true]);
-		assert.equal(mockPi.callCount(), 2);
 	});
 
 	it("background fails a zero-exit child that stops during a tool after earlier assistant output", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -292,94 +189,6 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			assert.match(status.steps?.[0]?.error ?? "", terminal.error);
 		});
 	}
-
-	it("background runs prefer empty-output fallback over an earlier tool error", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
-		mockPi.onCall({
-			jsonl: [
-				events.toolResult("read", "ENOENT: no such file or directory", true),
-				events.toolResult("read", "recovered file contents"),
-				{
-					type: "message_end",
-					message: {
-						role: "assistant",
-						content: [],
-						model: "openai/gpt-5-mini",
-						stopReason: "stop",
-						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
-					},
-				},
-			],
-			exitCode: 0,
-		});
-		mockPi.onCall({ output: "Recovered asynchronously on fallback" });
-		const id = `async-empty-output-after-tool-error-${Date.now().toString(36)}`;
-		executeAsyncSingle(id, {
-			agent: "worker",
-			task: "Do work",
-			agentConfig: makeAgent("worker", {
-				model: "openai/gpt-5-mini",
-				fallbackModels: ["anthropic/claude-sonnet-4"],
-			}),
-			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
-			artifactConfig: {
-				enabled: false,
-				includeInput: false,
-				includeOutput: false,
-				includeJsonl: false,
-				includeMetadata: false,
-				cleanupDays: 7,
-			},
-			shareEnabled: false,
-			maxSubagentDepth: 2,
-		});
-
-		const resultPath = await waitForAsyncResultFile(id);
-		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		assert.equal(payload.success, true);
-		assert.equal(payload.results[0]?.model, "anthropic/claude-sonnet-4");
-		assert.match(payload.results[0]?.modelAttempts?.[0]?.error ?? "", /no output/i);
-		assert.equal(mockPi.callCount(), 2);
-	});
-
-	it("background runs fail zero-exit provider errors when no fallback succeeds", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
-		mockPi.onCall({
-			jsonl: [{
-				type: "message_end",
-				message: {
-					role: "assistant",
-					content: [{ type: "text", text: "quota hit" }],
-					model: "openai/gpt-5-mini",
-					errorMessage: "429 quota exceeded",
-					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
-				},
-			}],
-			exitCode: 0,
-		});
-		const id = `async-zero-exit-provider-error-${Date.now().toString(36)}`;
-		executeAsyncSingle(id, {
-			agent: "worker",
-			task: "Do work",
-			agentConfig: makeAgent("worker", { model: "openai/gpt-5-mini" }),
-			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
-			artifactConfig: {
-				enabled: false,
-				includeInput: false,
-				includeOutput: false,
-				includeJsonl: false,
-				includeMetadata: false,
-				cleanupDays: 7,
-			},
-			shareEnabled: false,
-			maxSubagentDepth: 2,
-		});
-
-		const resultPath = await waitForAsyncResultFile(id);
-		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		assert.equal(payload.success, false);
-		assert.match(payload.results[0]?.error ?? "", /429 quota exceeded/);
-		const statusPayload = await waitForAsyncState(id, (status) => status.state === "failed");
-		assert.match(statusPayload.steps?.[0]?.error ?? "", /429 quota exceeded/);
-	});
 
 	it("background runs treat recovered child errors as successful", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({
@@ -814,12 +623,10 @@ export default function() {
 			const trace = fs.readFileSync(tracePath, "utf8");
 			assert.equal(trace.includes("auth"), scenario.calls, scenario.name);
 			assert.equal(trace.includes("stream"), scenario.calls, scenario.name);
-			if (!scenario.success) assert.match(payload.results[0].modelAttempts[0].error, /completed without making edits/, scenario.name);
+			if (!scenario.success) assert.match(payload.results[0].error, /completed without making edits/, scenario.name);
 			if (scenario.name === "review-rescue") {
 				assert.equal(payload.results[0].effects.fileMutation.resolvedBy, "llm-intent-arbiter");
 				assert.equal(payload.results[0].effects.fileMutation.expected, true);
-				assert.equal(payload.results[0].modelAttempts[0].success, true);
-				assert.equal(payload.results[0].modelAttempts[0].error, undefined);
 				assert.match(fs.readFileSync(outputPath, "utf8"), /Review findings: the proposal is sound/);
 				const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf8"));
 				assert.equal(status.state, "complete");
@@ -866,7 +673,6 @@ export default function() {
 		assert.equal(payload.exitCode, 1);
 		assert.equal(payload.results[0].success, false);
 		assert.match(String(payload.results[0].error ?? ""), /completed without making edits/);
-		assert.match(String(payload.results[0].modelAttempts?.[0]?.error ?? ""), /completed without making edits/);
 		assert.deepEqual(payload.results[0].effects?.settlementDiagnostic?.mutation, {
 			expected: true,
 			attempted: false,
@@ -1269,7 +1075,6 @@ export default function() {
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
 		assert.equal(payload.success, true);
 		assert.equal(payload.results[0].model, "github-copilot/gpt-5-mini");
-		assert.deepEqual(payload.results[0].attemptedModels, ["github-copilot/gpt-5-mini"]);
 	});
 
 	it("rejects an over-cap top-level async launch before creating run artifacts", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
@@ -1581,67 +1386,8 @@ export default function() {
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
 		assert.equal(payload.success, true);
 		assert.equal(payload.results[0].model, "deepseek/deepseek-v4-flash");
-		assert.deepEqual(payload.results[0].attemptedModels, ["deepseek/deepseek-v4-flash"]);
 		const args = readMockPiArgs(mockPi, 0);
 		assert.equal(args[args.indexOf("--model") + 1], "deepseek/deepseek-v4-flash");
-	});
-
-	it("background forked runs use an available fallback when the configured primary is unavailable", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
-		recordModelFailure({ modelId: "primary", provider: "mock", reason: "quota exhausted", ttlMs: 60_000 });
-		mockPi.onCall({ output: "Forked async work" });
-		const parentSessionFile = path.join(tempDir, "parent-pruned-fallback.jsonl");
-		const forkedSessionFile = path.join(tempDir, "forked-pruned-fallback.jsonl");
-		const sessionHeader = { type: "session", version: 1, id: "child", cwd: fs.realpathSync(tempDir), parentSession: parentSessionFile };
-		fs.writeFileSync(parentSessionFile, `${JSON.stringify({ type: "session", version: 1, id: "parent", cwd: fs.realpathSync(tempDir) })}\n`, "utf-8");
-		fs.writeFileSync(forkedSessionFile, `${JSON.stringify(sessionHeader)}\n`, "utf-8");
-		const pruner = { provider: "test", id: "pruner", api: "faux", maxTokens: 1024 };
-		const ctx = {
-			...makeMinimalCtx(tempDir),
-			modelRegistry: {
-				getAvailable: () => [
-					{ provider: "mock", id: "primary" },
-					{ provider: "mock", id: "fallback" },
-					pruner,
-				],
-				find: (provider: string, id: string) => provider === "test" && id === "pruner" ? pruner : undefined,
-				getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "faux" }),
-			},
-			sessionManager: {
-				getSessionId: () => "session-configured-fallback",
-				getSessionFile: () => parentSessionFile,
-				getLeafId: () => "leaf-current",
-				openSession: () => ({ createBranchedSession: () => forkedSessionFile }),
-			},
-		};
-		const launch = await makeAsyncExecutor([
-			makeAgent("worker", {
-				model: "mock/primary",
-				fallbackModels: ["mock/fallback"],
-				completionGuard: false,
-			}),
-		], { forkContext: { mode: "pruned", model: "test/pruner" } }).execute(
-			"forked-configured-fallback",
-			{ agent: "worker", task: "Do work", async: true, context: "fork" },
-			new AbortController().signal,
-			undefined,
-			ctx,
-		) as AsyncExecutionResult;
-		try {
-			assert.ok(!launch.isError, launch.content[0]?.text);
-			assert.ok(launch.details.asyncId);
-			const payload = await readAsyncPayload(launch.details.asyncId);
-			const child = payload.results[0] as typeof payload.results[number] & { requestedModel?: string; skippedModels?: Array<{ model: string; reason: string; expiresAt?: number }> };
-			assert.equal(child.model, "mock/fallback");
-			assert.equal(child.requestedModel, "mock/primary");
-			assert.equal(child.skippedModels?.[0]?.model, "mock/primary");
-			assert.equal(child.skippedModels?.[0]?.reason, "quota exhausted");
-			assert.ok((child.skippedModels?.[0]?.expiresAt ?? 0) > Date.now());
-			assert.deepEqual(child.attemptedModels, ["mock/fallback"]);
-			const args = readMockPiArgs(mockPi, 0);
-			assert.equal(args[args.indexOf("--model") + 1], "mock/fallback");
-		} finally {
-			clearExclusions();
-		}
 	});
 
 	it("revival preserves captured response aliases and their absence after config changes", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
@@ -2053,7 +1799,6 @@ export default function() {
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
 		assert.equal(payload.success, true);
 		assert.equal(payload.results[0].model, "deepseek/deepseek-v4-flash");
-		assert.deepEqual(payload.results[0].attemptedModels, ["deepseek/deepseek-v4-flash"]);
 		const args = readMockPiArgs(mockPi, 0);
 		assert.equal(args[args.indexOf("--model") + 1], "deepseek/deepseek-v4-flash");
 	});
@@ -2093,57 +1838,8 @@ export default function() {
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
 		assert.equal(payload.success, true);
 		assert.equal(payload.results[0].model, "openai/gpt-5-mini:high");
-		assert.deepEqual(payload.results[0].attemptedModels, ["openai/gpt-5-mini:high"]);
 		const args = readMockPiArgs(mockPi, 0);
 		assert.equal(args[args.indexOf("--model") + 1], "openai/gpt-5-mini:high");
-	});
-
-	it("background chains keep agent fallback models inherited for scope warnings", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
-		mockPi.onCall({ output: "Done asynchronously" });
-		const warnings: string[] = [];
-		const originalWarn = console.warn;
-		console.warn = (message?: unknown) => warnings.push(String(message));
-		try {
-			for (const [index, requestedModel] of [undefined, "", "inherit"].entries()) {
-				const id = `async-chain-no-parent-${index}-${Date.now().toString(36)}`;
-				executeAsyncChain(id, {
-					chain: [{ agent: "worker", task: "Do work", ...(requestedModel !== undefined ? { model: requestedModel } : {}) }],
-					agents: [makeAgent("worker", { model: "openai/gpt-5-mini", thinking: "high" })],
-					ctx: {
-						pi: { events: { emit() {} } },
-						cwd: tempDir,
-						currentSessionId: "session-1",
-						modelScope: { enforce: true, allow: ["anthropic/*"] },
-					},
-					availableModels: [
-						{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini", api: "openai-responses" },
-					],
-					artifactConfig: {
-						enabled: false,
-						includeInput: false,
-						includeOutput: false,
-						includeJsonl: false,
-						includeMetadata: false,
-						cleanupDays: 7,
-					},
-					shareEnabled: false,
-					sessionRoot: path.join(tempDir, "sessions"),
-					maxSubagentDepth: 2,
-				});
-
-				const resultPath = await waitForAsyncResultFile(id, 10_000);
-				const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-				assert.equal(payload.success, true);
-				assert.equal(payload.results[0].model, "openai/gpt-5-mini:high");
-				assert.deepEqual(payload.results[0].attemptedModels, ["openai/gpt-5-mini:high"]);
-				const args = readMockPiArgs(mockPi, index);
-				assert.equal(args[args.indexOf("--model") + 1], "openai/gpt-5-mini:high");
-			}
-			assert.equal(warnings.length, 3);
-			assert.equal(warnings.every((warning) => warning.includes("outside the configured subagent model scope")), true);
-		} finally {
-			console.warn = originalWarn;
-		}
 	});
 
 	it("background runs resolve skills from the effective task cwd", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

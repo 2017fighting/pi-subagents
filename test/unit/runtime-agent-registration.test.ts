@@ -238,7 +238,6 @@ describe("runtime agent registration", () => {
 				systemPrompt: "Help with model routing.",
 				aliases: ["model-helper"],
 				model: "openai/gpt-5-mini",
-				fallbackModels: ["anthropic/claude-sonnet-4"],
 				thinking: "high",
 			},
 		});
@@ -257,7 +256,7 @@ describe("runtime agent registration", () => {
 			const all = handleManagementAction("models", {}, ctx);
 			const allText = all.content.map((part) => part.type === "text" ? part.text ?? "" : "").join("\n");
 			assert.equal(all.isError, false);
-			assert.match(allText, /runtime-model-helper\n  model:\n    openai\/gpt-5-mini\n  source: runtime agent config\n  thinking: high\n  fallback models:\n    anthropic\/claude-sonnet-4/);
+			assert.match(allText, /runtime-model-helper\n  model:\n    openai\/gpt-5-mini\n  source: runtime agent config\n  thinking: high/);
 
 			const filtered = handleManagementAction("models", { agent: "model-helper" }, ctx);
 			const filteredText = filtered.content.map((part) => part.type === "text" ? part.text ?? "" : "").join("\n");
@@ -265,7 +264,6 @@ describe("runtime agent registration", () => {
 			assert.match(filteredText, /Agent: model-helper/);
 			assert.match(filteredText, /Effective model:\n  openai\/gpt-5-mini/);
 			assert.match(filteredText, /Source: runtime agent config/);
-			assert.match(filteredText, /Fallback models:\n  anthropic\/claude-sonnet-4/);
 		} finally {
 			registration.dispose();
 		}

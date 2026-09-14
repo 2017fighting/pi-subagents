@@ -24,7 +24,7 @@ Project settings resolve from the nearest parent directory containing `.pi` or `
 
 An agent may set `runner.type: external-cli` with a non-empty `command`, optional string `args`, and `promptDelivery: stdin` (the default). The command runs with `shell: false`, inherits the resolved cwd and environment, and receives the combined agent instructions and task through stdin. It must already be installed; pi-subagents adds no CLI dependency.
 
-External CLI profiles are async-only and one-shot. They support lifecycle artifacts, stdout/stderr logs, timeout, and stop. Full stdout and stderr are retained in their log files, while the final stdout response and stderr error kept in memory are each limited to their last 64 KiB. They do not support native Pi child options such as model override, structured output, acceptance/agent contract, tool budgets, fast mode, fork context, skills, or native Pi tools unless the runner explicitly implements them. Foreground/clarify, steer/resume/interrupt-as-pause, nested subagents, fallbacks, and sessions are also unsupported.
+External CLI profiles are async-only and one-shot. They support lifecycle artifacts, stdout/stderr logs, timeout, and stop. Full stdout and stderr are retained in their log files, while the final stdout response and stderr error kept in memory are each limited to their last 64 KiB. They do not support native Pi child options such as model override, structured output, acceptance/agent contract, tool budgets, fast mode, fork context, skills, or native Pi tools unless the runner explicitly implements them. Foreground/clarify, steer/resume/interrupt-as-pause, nested subagents, and sessions are also unsupported.
 
 ### External job profiles
 
@@ -32,7 +32,7 @@ An agent may set `runner.type: external-job` with a non-empty `provider` and opt
 
 External job profiles are async-only. The provider owns the remote job and Pi owns the async run record. Status persists provider name, provider job id, prompt digest, provider options, handle/conversation URLs when supplied, result artifact path, last known state, and provider failure code/message. Recovery uses existing provider job metadata to call `reattach` and `result`; it refuses to redispatch a prompt when the persisted provider job does not match the prompt digest.
 
-External job profiles do not support foreground/clarify, steer/resume, Pi models/tools/extensions/skills, tool budgets, structured output, native child permissions, fallbacks, or Pi child sessions. Capacity conflicts fail closed and include the blocking provider job id when the provider supplies it.
+External job profiles do not support foreground/clarify, steer/resume, Pi models/tools/extensions/skills, tool budgets, structured output, native child permissions, or Pi child sessions. Capacity conflicts fail closed and include the blocking provider job id when the provider supplies it.
 
 ### Single agent
 
@@ -248,9 +248,9 @@ Use diagnostics when setup or child startup looks wrong:
 subagent({ action: "doctor" })
 ```
 
-### Failed lane recovery and execution-mode fallback
+### Failed lane recovery and execution-mode changes
 
-A failure in the subagent workflow, child launch, prompt runtime, extension loading, or child tooling setup is a lane infrastructure blocker, not permission to silently change execution mode. Stop and report the exact failure, run/status, and repo/cwd/worktree/branch/ref state. Retry or fix the `subagent` path only through a clear same-protocol retry; before retrying or asking the owner, verify the worktree is clean or capture the partial diff. For backlog lanes and other subagent-governed workflows, switching to `interactive_shell`, `pi -ne`, Codex/Claude/Cursor CLI, a foreground agent, or another external mode requires explicit owner approval. Pi core may print a generic `pi -ne` extension-load hint; that hint is outside this package and is not protocol-approved fallback. This execution-mode boundary does not prohibit configured native model/provider fallback.
+A failure in the subagent workflow, child launch, prompt runtime, extension loading, or child tooling setup is a lane infrastructure blocker, not permission to silently change execution mode. Stop and report the exact failure, run/status, and repo/cwd/worktree/branch/ref state. Retry or fix the `subagent` path only through a clear same-protocol retry; before retrying or asking the owner, verify the worktree is clean or capture the partial diff. For backlog lanes and other subagent-governed workflows, switching to `interactive_shell`, `pi -ne`, Codex/Claude/Cursor CLI, a foreground agent, or another external mode requires explicit owner approval. Pi core may print a generic `pi -ne` extension-load hint; that hint is outside this package and is not protocol-approved. A verified compaction abort may continue the retained child session once on the same resolved model; provider failures never select another model automatically.
 
 ### External terminal work
 

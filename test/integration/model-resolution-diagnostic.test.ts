@@ -10,7 +10,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { createDefaultChildSessionFactory, type PiCodingAgentModule } from "../../src/runs/shared/child-session.ts";
-import { clearExclusions } from "../../src/runs/shared/model-exclusions.ts";
 import { runSync } from "../../src/runs/foreground/execution.ts";
 import { buildRunnerChildLaunch } from "../../src/runs/background/runner-child-launch.ts";
 import { runChildSession } from "../../src/runs/background/run-child-session.ts";
@@ -37,9 +36,6 @@ describe("child model resolution diagnostic", () => {
 	let tempDir: string;
 
 	beforeEach(() => {
-		// A failed foreground attempt records a short-lived model exclusion, which
-		// would otherwise filter the next attempt at the same model.
-		clearExclusions();
 		tempDir = createTempDir();
 	});
 	afterEach(() => removeTempDir(tempDir));

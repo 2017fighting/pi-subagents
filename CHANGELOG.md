@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Highlights
+- Every child launch now resolves one model; provider failures are returned instead of switching models automatically. A verified compaction abort may continue the retained session once on that same model.
 - Workflow scripts accept `args`, so one script can be reused with different inputs, including from schedules.
 - Subagents can run on another computer through a saved Herdr machine.
 - Async children can be asked to checkpoint before their deadline instead of being killed mid-task.
@@ -13,7 +14,6 @@
 
 ### Added
 
-- Expose the requested model and cached-exclusion skips in foreground results and async status, so audits can distinguish an intended primary from the fallback that actually ran. Thanks to [@mxp7064](https://github.com/mxp7064) for the report and design in #2245.
 - Accept bounded plain-JSON `args` for inline, file-backed, validated, and scheduled workflow scripts. Scripts receive deeply frozen arguments; schedules retain normalized values for replay, and workflow evidence binds them to a canonical digest (#2233).
 - Left-click the async widget header in mouse-enabled Pi fullscreen mode to fold it into a live status summary and unfold it again, independently of global tool expansion. Progress updates preserve the fold state; run execution and notifications are unchanged. Thanks to [@pstanton237](https://github.com/pstanton237) for #2235.
 - Allow agents to declare an inline JSON Schema `outputSchema` default, with launch objects overriding it and explicit `false` opting out. Thanks to [@peedrr](https://github.com/peedrr) for #2180.
@@ -29,6 +29,7 @@
 
 ### Removed
 
+- Remove `fallbackModels`, all same-launch model switching (including read-only HTTP 429 continuation), and persistent model exclusions. Retry another model only with a later explicit launch; guarded retained-session compaction recovery may continue once on the already resolved model.
 - Drop the bundled `@earendil-works/pi-server` copy that filled in the dependency Pi 0.85.0 forgot to ship. Background children on a Pi 0.85.0 host now fail to launch with a clear error; upgrade to Pi 0.85.1 or newer, which ships the package itself. Foreground children on 0.85.0 are unaffected.
 
 ### Fixed
@@ -36,7 +37,6 @@
 - Honor `PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT` in the detached background runner's host-package detection. The foreground `resolvePiCliScript` path already accepts it as an explicit override; the detached runner ignored it and failed closed with "neither is available" on hosts whose install layout automatic discovery cannot identify (wrapper installs, non-standard layouts). Both child kinds now resolve the same host with the same precedence and still validate the canonical package, and the spawn tests pin the variable so ambient values cannot skew them. Thanks to [@Yaphet2015](https://github.com/Yaphet2015) for #2254.
 - Keep the resolved report in the foreground diagnostic artifact when explicit acceptance rejects a child that saved its output; the file-only pointer no longer overwrites it. Thanks to [@pgoodjohn](https://github.com/pgoodjohn) for #2255.
 - Add the ambient-extension rule to Pi's model-not-found error when a child's model comes from an extension-registered provider that was not loaded for it: a foreground child now reports that agents needing a provider extension's models must run as background children (`async: true`) or load the extension explicitly through `subagentOnlyExtensions`/`extensions`, and a background child launched without the ambient extensions gets the matching remedies. When `capabilityCeiling.denyExtensions` blocks every extension, both hosts report the policy instead of remedies the ceiling discards. The core error, exit code, and failure detection are unchanged. Thanks to [@pwguler](https://github.com/pwguler) for #2240.
-- Retry an unused fallback model after a provider stream closes before its terminal event. These transient failures do not create a cached model exclusion. Thanks to [@ghostwriternr](https://github.com/ghostwriternr) for #2256.
 - Remote Herdr bridge discovery no longer blocks the parent session while waiting for the remote Pi to start.
 
 - Recognize Windows Bun virtual entrypoints when launching standalone background children, retaining the existing Linux and npm paths. Windows coverage remains experimental; see `docs/standalone-background.md`. Thanks to [@JohnsonRan](https://github.com/JohnsonRan) for #2241.

@@ -20,7 +20,6 @@ export type RecommendedRoleTier = "cheap" | "medium" | "strong";
 interface ProfileAgentOverride {
 	model?: string;
 	thinking?: string | false;
-	fallbackModels?: string[] | false;
 	machine?: string;
 }
 
@@ -145,10 +144,7 @@ function validateSubagentProfile(filePath: string, parsed: Record<string, unknow
 		if (thinking !== undefined && thinking !== false && typeof thinking !== "string") {
 			throw new Error(`Profile '${filePath}' has invalid thinking for '${name}'; expected a string or false.`);
 		}
-		const fallbackModels = override.fallbackModels;
-		if (fallbackModels !== undefined && fallbackModels !== false && (!Array.isArray(fallbackModels) || fallbackModels.some((item) => typeof item !== "string"))) {
-			throw new Error(`Profile '${filePath}' has invalid fallbackModels for '${name}'; expected an array of strings or false.`);
-		}
+		if ((override as Record<string, unknown>).fallbackModels !== undefined) throw new Error(`Profile '${filePath}' uses removed field fallbackModels for '${name}'; configure one model instead.`);
 	}
 	const disableBuiltins = (subagents as Record<string, unknown>).disableBuiltins;
 	if (disableBuiltins !== undefined && typeof disableBuiltins !== "boolean") {

@@ -821,7 +821,6 @@ export interface SteeringRecoveryDescriptor {
 	modelProvider?: string;
 	modelOverrideFromParent?: boolean;
 	modelOrigin?: "explicit" | "inherited" | "configured";
-	fallbackModels?: string[];
 	fast?: boolean;
 	thinking?: string;
 	thinkingCeiling?: ThinkingLevel;
@@ -1001,20 +1000,6 @@ interface ProgressSummary {
 // ============================================================================
 // Results
 // ============================================================================
-
-export interface ModelAttempt {
-	model: string;
-	success: boolean;
-	exitCode?: number | null;
-	error?: string;
-	usage?: Usage;
-}
-
-export interface SkippedModel {
-	model: string;
-	reason: string;
-	expiresAt?: number;
-}
 
 export type AcceptanceLevel = "auto" | "none" | "attested" | "checked" | "verified";
 
@@ -1284,15 +1269,11 @@ export interface SingleResult {
 	/** Effective thinking level used by this foreground child, when known. */
 	thinking?: string;
 	requestedModel?: string;
-	skippedModels?: SkippedModel[];
-	attemptedModels?: string[];
-	modelAttempts?: ModelAttempt[];
 	controlEvents?: ControlEvent[];
 	error?: string;
 	/**
 	 * True when the dispatch failed because the input exceeded the model's
-	 * context window. The model fallback loop stops immediately (retrying the
-	 * same input on another model cannot succeed). Callers should treat this as
+	 * context window. Callers should treat this as
 	 * a signal to reduce input size or re-decompose the task.
 	 */
 	contextOverflow?: boolean;
@@ -1405,7 +1386,7 @@ export interface AgentCapabilityRow {
 	aliases?: string[];
 	runner: { type: "pi" } | { type: "external-cli"; adapter?: string; command: string; machine?: string; available: boolean; unavailableReason?: string; capabilities: ExternalCliCapabilities } | { type: "external-job"; provider: string; available?: boolean; capabilities: ExternalJobRunnerStatus["capabilities"] };
 	tools: { ambient: boolean; names: string[]; excludeTools?: string[]; mcpDirectTools: string[]; mutationTools?: string[] };
-	model?: { value?: string; fallbackModels?: string[]; thinking?: string | false };
+	model?: { value?: string; thinking?: string | false };
 	execution?: { defaultAsync?: boolean; timeoutMs?: number };
 	acceptance?: { policy?: AcceptanceInput; role?: AcceptanceRole };
 	output?: { path?: string; mode?: OutputMode };
@@ -1983,9 +1964,6 @@ export interface AsyncStatus {
 		contextLimit?: number;
 		thinkingCeiling?: ThinkingLevel;
 		requestedModel?: string;
-		skippedModels?: SkippedModel[];
-		attemptedModels?: string[];
-		modelAttempts?: ModelAttempt[];
 		/** True when the child input exceeded the model context window. */
 		contextOverflow?: boolean;
 		totalCost?: CostSummary;
@@ -2505,7 +2483,7 @@ export interface RunSyncOptions {
 	runtimeSnapshotHost?: import("../runs/shared/mcp-direct-tool-allowlist.ts").McpRuntimeSnapshotHost;
 	/** Builtin tool names the host runtime provides; used to intersect agent-declared tools. */
 	hostAvailableBuiltins?: readonly string[];
-	/** Optional subagent model-scope enforcement for fallback candidates */
+	/** Optional subagent model-scope enforcement. */
 	modelScope?: ModelScopeRule | ModelScopeRule[];
 	/** Skills to make available (overrides agent default if provided) */
 	skills?: string[];
@@ -2565,11 +2543,6 @@ export interface ScheduledRunsConfig {
 	maxPending?: number;
 	/** Absolute or `~/` root for per-project durable schedules. */
 	storeRoot?: string;
-}
-
-export interface ModelExclusionsConfig {
-	/** Default duration in milliseconds. A lower configured value also shortens active cached exclusions. */
-	defaultTtlMs?: number;
 }
 
 export type FleetViewPlacement = "aboveEditor" | "belowEditor";
@@ -2634,8 +2607,6 @@ export interface ExtensionConfig {
 	fleetKeybindings?: FleetKeybindingsConfig;
 	/** Show the under-editor async runs widget. Defaults to true, including when FleetView is enabled. */
 	asyncWidget?: boolean;
-	/** Configure the process-wide TTL policy for persisted model exclusions. */
-	modelExclusions?: ModelExclusionsConfig;
 	/** Exact provider/model candidates mapped to operator-declared equivalent response IDs. Empty arrays add no accepted IDs. */
 	modelResponseAliases?: Record<string, string[]>;
 	/** Tool description variant registered for the parent-facing subagent tool. Defaults to split metadata. */
