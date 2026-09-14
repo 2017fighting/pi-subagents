@@ -33,6 +33,20 @@ function sshEnvCommand(session: string | undefined, command: string): string { c
 
 export function runHerdrRemoteCommand(machine: HerdrMachineReference, command: string, options: { sshBin?: string; env?: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number } = {}) { return spawnSync(options.sshBin ?? "ssh", [...herdrSshArgs(options.env), machine.target, command], { encoding: "utf8", env: hardenedSshEnv(options.env), timeout: options.timeout ?? 15_000, maxBuffer: options.maxBuffer ?? MAX_DISCOVERY_BYTES, windowsHide: true }); }
 
+export function runHerdrRemoteCommandAsync(machine: HerdrMachineReference, command: string, options: { sshBin?: string; env?: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number } = {}): Promise<{ status: number | null; stdout: string; stderr: string; error?: Error }> {
+	return new Promise((resolve) => {
+		const child = spawn(options.sshBin ?? "ssh", [...herdrSshArgs(options.env), machine.target, command], { env: hardenedSshEnv(options.env), stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+		const stdout: Buffer[] = [], stderr: Buffer[] = [], maxBuffer = options.maxBuffer ?? MAX_DISCOVERY_BYTES; let stdoutBytes = 0, stderrBytes = 0, error: Error | undefined, settled = false, escalation: NodeJS.Timeout | undefined;
+		const finish = (status: number | null, spawnError = error) => { if (settled) return; settled = true; clearTimeout(timer); if (escalation) clearTimeout(escalation); resolve({ status, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), ...(spawnError ? { error: spawnError } : {}) }); };
+		const terminate = () => { child.kill("SIGTERM"); escalation ??= setTimeout(() => { if (!settled) { child.kill("SIGKILL"); finish(child.exitCode ?? null); } }, 1_000); escalation.unref?.(); };
+		const collect = (target: Buffer[], stream: "stdout" | "stderr") => (chunk: Buffer) => { const bytes = stream === "stdout" ? (stdoutBytes += chunk.byteLength) : (stderrBytes += chunk.byteLength); if (bytes > maxBuffer) { error ??= new Error(`${stream} maxBuffer length exceeded`); terminate(); } else target.push(chunk); };
+		child.stdout.on("data", collect(stdout, "stdout")); child.stderr.on("data", collect(stderr, "stderr"));
+		child.once("error", (spawnError) => finish(null, spawnError));
+		child.once("close", (status) => finish(status));
+		const timer = setTimeout(terminate, options.timeout ?? 15_000); timer.unref?.();
+	});
+}
+
 export function parseHerdrEndpoint(value: string, expectedSession?: string): HerdrEndpoint {
 	let parsed: unknown;
 	try { parsed = JSON.parse(value) as unknown; } catch { throw new Error("Remote Herdr endpoint discovery returned malformed JSON."); }
@@ -45,9 +59,9 @@ export function parseHerdrEndpoint(value: string, expectedSession?: string): Her
 	return { socket: p.socket, session, version: p.version, protocol: p.protocol, compatible: true, running: true };
 }
 
-export function discoverHerdrEndpoint(machine: HerdrMachineReference, options: { sshBin?: string; env?: NodeJS.ProcessEnv } = {}): HerdrEndpoint {
+export async function discoverHerdrEndpoint(machine: HerdrMachineReference, options: { sshBin?: string; env?: NodeJS.ProcessEnv } = {}): Promise<HerdrEndpoint> {
 	const discovery = 'herdr_path=$(command -v herdr) || exit 127; case "$herdr_path" in /*/herdr) ;; *) exit 126;; esac; exec "$herdr_path" status server --json';
-	const result = runHerdrRemoteCommand(machine, sshEnvCommand(machine.session, discovery), { ...options, timeout: 15_000, maxBuffer: MAX_DISCOVERY_BYTES });
+	const result = await runHerdrRemoteCommandAsync(machine, sshEnvCommand(machine.session, discovery), { ...options, timeout: 15_000, maxBuffer: MAX_DISCOVERY_BYTES });
 	if (result.error) throw new Error(`Remote Herdr discovery failed: ${result.error.message}`);
 	if (result.status !== 0) throw new Error(`Remote Herdr discovery failed with code ${result.status}: ${(result.stderr || result.stdout).trim()}`);
 	return parseHerdrEndpoint(result.stdout, machine.session);
@@ -104,7 +118,7 @@ async function terminateChild(child: ChildProcess): Promise<void> { const wait =
 
 export async function connectHerdrMachine(machine: HerdrMachineReference, options: { sshBin?: string; env?: NodeJS.ProcessEnv } = {}): Promise<HerdrForwardedConnection> {
 	if (process.platform === "win32") throw new Error("Pane-native Herdr placement requires OpenSSH StreamLocal forwarding and is not supported on Windows.");
-	const endpoint = discoverHerdrEndpoint(machine, options);
+	const endpoint = await discoverHerdrEndpoint(machine, options);
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-herdr-")); fs.chmodSync(dir, 0o700);
 	const children = new Set<ChildProcess>();
 	const forward = async (remotePath: string, name: string) => {

@@ -63,6 +63,12 @@ export function normalizeOutputOverride(output: unknown): string | false | undef
 
 export const resolveEffectiveOutputSchema = (agentConfig: AgentConfig, override?: JsonSchemaObject | false): JsonSchemaObject | undefined => override === false ? undefined : override !== undefined ? override : agentConfig.outputSchema;
 
+type OutputSchemaStep = { agent: string; outputSchema?: JsonSchemaObject | false };
+export function projectChainOutputSchemas<S extends OutputSchemaStep, R = S, G = { parallel: R[] | R }>(chain: readonly (S | { parallel: S[] | S })[], agents: AgentConfig[], projectStep?: (step: S, outputSchema: JsonSchemaObject | undefined) => R, projectGroup?: (step: { parallel: S[] | S }, parallel: R[] | R) => G): Array<R | G> {
+	const project = (step: S): R => { const agent = agents.find((candidate) => candidate.name === step.agent); if (!agent && !projectStep) return step as unknown as R; const outputSchema = agent && resolveEffectiveOutputSchema(agent, step.outputSchema); return projectStep ? projectStep(step, outputSchema) : { ...step, outputSchema } as unknown as R; };
+	return chain.map((step) => { if (!("parallel" in step)) return project(step as S); const parallel = Array.isArray(step.parallel) ? step.parallel.map(project) : project(step.parallel as S); return projectGroup ? projectGroup(step, parallel) : { ...step, parallel } as unknown as G; });
+}
+
 export function resolveStepBehavior(
 	agentConfig: AgentConfig,
 	stepOverrides: StepOverrides,
