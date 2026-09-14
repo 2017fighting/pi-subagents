@@ -2,13 +2,29 @@
 
 ## [Unreleased]
 
+### Highlights
+- Workflow scripts accept `args`, so one script can be reused with different inputs, including from schedules.
+- Subagents can run on another computer through a saved Herdr machine.
+- Async children can be asked to checkpoint before their deadline instead of being killed mid-task.
+- Slow local models no longer time out at five minutes in the detached runner; Pi's `httpIdleTimeoutMs` now applies.
+- Delegation is opt-in again: the parent owns the work by default, and the bundled skill only guides delegation when the operator asks for it.
+- Watchdog findings carry an explicit importance; only high findings reach the model.
+- Background children now need Pi 0.85.1 or newer; the workaround for Pi 0.85.0's missing `pi-server` dependency is gone.
+
 ### Added
 
 - Accept bounded plain-JSON `args` for inline, file-backed, validated, and scheduled workflow scripts. Scripts receive deeply frozen arguments; schedules retain normalized values for replay, and workflow evidence binds them to a canonical digest (#2233).
+- Left-click the async widget header in mouse-enabled Pi fullscreen mode to fold it into a live status summary and unfold it again, independently of global tool expansion. Progress updates preserve the fold state; run execution and notifications are unchanged. Thanks to [@pstanton237](https://github.com/pstanton237) for #2235.
+- Allow agents to declare an inline JSON Schema `outputSchema` default, with launch objects overriding it and explicit `false` opting out. Thanks to [@peedrr](https://github.com/peedrr) for #2180.
+- Add `PI_SUBAGENT_CACHE_RETENTION` to set a prompt-cache retention tier for child sessions only, so a parent on the 1h tier can keep children on the cheaper-to-write 5m tier they are too short-lived to benefit from. Unset by default, leaving children on the parent's retention. Spawned children take it through the launch environment; in-process children pin it per request on their own session rather than on shared process state. Thanks to [@johnwards](https://github.com/johnwards) for #2190.
+- Add a session-scoped public host API for required native-child extension module paths. Required extensions survive agent overrides and detached/nested launches, appear by safe host ID in launch evidence, and fail closed when denied or unable to load before model resolution. Thanks to [@gkoreli](https://github.com/gkoreli) for #2153.
+- Run Pi, Claude Code, Codex, and Cursor subagents on another computer by setting `machine` to a saved Herdr machine.
+- Add `checkpointBeforeDeadlineMs` for async single-agent runs (call param, with a global config default): the runner requests that the child "checkpoint and stop" that many milliseconds before its run deadline. This best-effort handoff request uses the normal steering lifecycle at the child's next tool boundary, so its receipt appears in status and events; the ordinary `timeoutMs` kill still applies. Absent option keeps the current behavior. Thanks to [@freezscholte](https://github.com/freezscholte) for #2141.
+- Add `subagents.agentExcludeDirs` to prune directory subtrees from agent discovery, including nested plugin sources, without disabling ordinary legacy agents. Exclusions respect symlink aliases and apply to explicit/package roots, diagnostics, and agent cache fingerprints. Thanks to [@xarillian](https://github.com/xarillian) for #2131.
 
 ### Removed
 
-- Drop the Pi 0.85.0 `pi-server` supplementation shim and its bundled dependency; supported Pi 0.85.1+ hosts ship the runtime package themselves. Pi 0.85.0 is no longer supported.
+- Drop the bundled `@earendil-works/pi-server` copy that filled in the dependency Pi 0.85.0 forgot to ship. Background children on a Pi 0.85.0 host now fail to launch with a clear error; upgrade to Pi 0.85.1 or newer, which ships the package itself. Foreground children on 0.85.0 are unaffected.
 
 ### Fixed
 
@@ -40,16 +56,6 @@
 - Let Pi continue threshold and overflow compactions without an extra extension resume, while preserving manual re-drive for active async work. Thanks to [@mxp7064](https://github.com/mxp7064) for #2144.
 - Allow an explicit model request when a cached unavailable-model exclusion is contradicted by the current model registry, while preserving live health, auth, quota, and rate-limit exclusions. Thanks to [@xz-dev](https://github.com/xz-dev) for identifying the stale explicit-request cache symptom in #2145.
 - Preserve wrapped Pi core tools and explicitly requested non-core tools in child launches. Core slots still respect host availability; non-core tools are validated in the child's runtime after ceilings and exclusions (#2132, #2133, #2134, #2135, #2140). Thanks to [@carlesba](https://github.com/carlesba) for #2137 and [@clementprevot](https://github.com/clementprevot) for #2138.
-
-### Added
-
-- Left-click the async widget header in mouse-enabled Pi fullscreen mode to fold it into a live status summary and unfold it again, independently of global tool expansion. Progress updates preserve the fold state; run execution and notifications are unchanged. Thanks to [@pstanton237](https://github.com/pstanton237) for #2235.
-- Allow agents to declare an inline JSON Schema `outputSchema` default, with launch objects overriding it and explicit `false` opting out. Thanks to [@peedrr](https://github.com/peedrr) for #2180.
-- Add `PI_SUBAGENT_CACHE_RETENTION` to set a prompt-cache retention tier for child sessions only, so a parent on the 1h tier can keep children on the cheaper-to-write 5m tier they are too short-lived to benefit from. Unset by default, leaving children on the parent's retention. Spawned children take it through the launch environment; in-process children pin it per request on their own session rather than on shared process state. Thanks to [@johnwards](https://github.com/johnwards) for #2190.
-- Add a session-scoped public host API for required native-child extension module paths. Required extensions survive agent overrides and detached/nested launches, appear by safe host ID in launch evidence, and fail closed when denied or unable to load before model resolution. Thanks to [@gkoreli](https://github.com/gkoreli) for #2153.
-- Run Pi, Claude Code, Codex, and Cursor subagents on another computer by setting `machine` to a saved Herdr machine.
-- Add `checkpointBeforeDeadlineMs` for async single-agent runs (call param, with a global config default): the runner requests that the child "checkpoint and stop" that many milliseconds before its run deadline. This best-effort handoff request uses the normal steering lifecycle at the child's next tool boundary, so its receipt appears in status and events; the ordinary `timeoutMs` kill still applies. Absent option keeps the current behavior. Thanks to [@freezscholte](https://github.com/freezscholte) for #2141.
-- Add `subagents.agentExcludeDirs` to prune directory subtrees from agent discovery, including nested plugin sources, without disabling ordinary legacy agents. Exclusions respect symlink aliases and apply to explicit/package roots, diagnostics, and agent cache fingerprints. Thanks to [@xarillian](https://github.com/xarillian) for #2131.
 
 ## [0.67.0] - 2026-09-10
 
