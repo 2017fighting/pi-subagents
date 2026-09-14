@@ -518,6 +518,34 @@ describe("async resume lookup", () => {
 		}
 	});
 
+	it("rejects a stopped child selected from a terminal aggregate", () => {
+		for (const stoppedStep of [{ status: "stopped" }, { status: "failed", stopped: true }]) {
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-stopped-child-"));
+			try {
+				const asyncRoot = path.join(root, "runs");
+				const stoppedSession = path.join(root, "stopped.jsonl");
+				const completedSession = path.join(root, "completed.jsonl");
+				fs.writeFileSync(stoppedSession, "", "utf-8");
+				fs.writeFileSync(completedSession, "", "utf-8");
+				writeJson(path.join(asyncRoot, "run-aggregate", "status.json"), {
+					runId: "run-aggregate", mode: "parallel", state: "failed", startedAt: 100, endedAt: 200, lastUpdate: 200, cwd: root,
+					steps: [
+						{ agent: "stopped-child", ...stoppedStep, sessionFile: stoppedSession },
+						{ agent: "completed-child", status: "complete", sessionFile: completedSession },
+					],
+				});
+
+				assert.throws(
+					() => resolveAsyncResumeTarget({ id: "run-aggregate", index: 0 }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") }),
+					/child 0 was stopped and cannot be resumed/,
+				);
+				assert.equal(resolveAsyncResumeTarget({ id: "run-aggregate", index: 1 }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") }).agent, "completed-child");
+			} finally {
+				fs.rmSync(root, { recursive: true, force: true });
+			}
+		}
+	});
+
 	it("rejects stopped runs instead of reviving them", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-stopped-"));
 		try {

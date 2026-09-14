@@ -557,7 +557,11 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 	const index = requestedIndex ?? 0;
 	if (!Number.isInteger(index)) throw new Error(`Async run '${runId}' index must be an integer.`);
 	if (index < 0 || index >= stepCount) throw new Error(`Async run '${runId}' has ${stepCount} children. Index ${index} is out of range.`);
-	const agent = statusSteps[index]?.agent ?? resultSteps[index]?.agent ?? result?.agent;
+	const selectedStatusStep = statusSteps[index];
+	if (selectedStatusStep?.status === "stopped" || selectedStatusStep?.stopped === true) {
+		throw new Error(`Async run '${runId}' child ${index} was stopped and cannot be resumed. Start a new run instead.`);
+	}
+	const agent = selectedStatusStep?.agent ?? resultSteps[index]?.agent ?? result?.agent;
 	if (!agent) throw new Error(`Could not determine child agent for async run '${runId}'.`);
 	if (recoveryDescriptor && recoveryDescriptor.agent !== agent) throw new Error(`Async run '${runId}' has a recovery descriptor for '${recoveryDescriptor.agent}', not '${agent}'.`);
 	const sessionFile = statusSteps[index]?.sessionFile
