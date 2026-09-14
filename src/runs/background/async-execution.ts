@@ -89,7 +89,22 @@ import { assertWorkflowLaneKey, normalizeWorkflowLaneMetadata } from "../shared/
 import { resolveRequiredChildExtensions, type RequiredChildExtensionSnapshot } from "../../shared/required-child-extensions.ts";
 
 const require = nodeModule.createRequire(import.meta.url);
-const piPackageRoot = resolvePiPackageRoot() ?? resolveInstalledPiPackageRoot();
+const piPackageRoot = resolveAsyncPiPackageRoot();
+
+/**
+ * The detached runner resolves the same host package the foreground
+ * `resolvePiCliScript` path resolves, so an explicit
+ * `PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT` override must be honored here
+ * too. Precedence mirrors the foreground resolver: argv-based discovery wins
+ * first (the foreground returns the argv script before any candidate), the
+ * environment override is consulted when that discovery cannot identify the
+ * host (wrapper installs, non-standard layouts), and the
+ * package-manager entry is last. Without the override, such hosts fail
+ * closed with "neither is available" while foreground children launch fine.
+ */
+function resolveAsyncPiPackageRoot(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	return resolvePiPackageRoot() || env[PI_CODING_AGENT_PACKAGE_ROOT_ENV]?.trim() || resolveInstalledPiPackageRoot();
+}
 
 function resolveJitiCliFromPackageJson(packageJsonPath: string): string | undefined {
 	if (!fs.existsSync(packageJsonPath)) return undefined;
