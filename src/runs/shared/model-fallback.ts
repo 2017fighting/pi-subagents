@@ -1,10 +1,16 @@
 import { splitKnownThinkingSuffix as splitThinkingSuffix, type ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
-import type { Usage } from "../../shared/types.ts";
+import type { SkippedModel, Usage } from "../../shared/types.ts";
 import { filterFallbackCandidates, findModelExclusion, parseModelKey, recordModelFailure } from "./model-exclusions.ts";
 import { checkModelScope, type ModelScopeCheckRule, type ModelScopeViolation, type ModelSource } from "./model-scope.ts";
 import { redactSecretValues } from "./permissions.ts";
 
 export type { AvailableModelInfo };
+
+export interface ModelCandidateEvidence {
+	candidates: string[];
+	requestedModel?: string;
+	skippedModels?: SkippedModel[];
+}
 
 interface ModelAttemptSummary {
 	model: string;
@@ -456,18 +462,21 @@ export function buildModelCandidates(
 	availableModels: AvailableModelInfo[] | undefined,
 	preferredProvider?: string,
 	options?: BuildModelCandidatesOptions,
-): string[] {
+): ModelCandidateEvidence {
 	if (!primaryModel) throwForUnresolvedEnforcedInheritScope(options?.scope, true);
 	const origin = options?.origin ?? (options?.primaryModelFromParent ? "inherited" : "configured");
+	const requestedModel = origin === "inherited" ? undefined : primaryModel;
 	const scopes = configuredScopes(options?.scope);
 	type ExcludedCandidate = { candidate: string; exclusion: NonNullable<ReturnType<typeof findModelExclusion>> };
 	const excludedCandidates: ExcludedCandidate[] = [];
+	const skippedModels: SkippedModel[] = [];
 	let excludedCandidateCount = 0;
 	const warnCachedExclusion = (candidate: string, exclusion: NonNullable<ReturnType<typeof findModelExclusion>>) => {
 		excludedCandidateCount++;
 		if (excludedCandidates.length < MODEL_EXCLUSION_DIAGNOSTIC_MAX_ENTRIES) excludedCandidates.push({ candidate, exclusion });
 		const displayCandidate = sanitizeModelExclusionDiagnostic(candidate, "unknown");
 		const reason = sanitizeModelExclusionDiagnostic(exclusion.reason, "runtime-failure");
+		skippedModels.push({ model: candidate, reason, ...(Number.isFinite(exclusion.expiresAt) ? { expiresAt: exclusion.expiresAt } : {}) });
 		console.warn(`[pi-subagents] Skipping model '${displayCandidate}' due to a cached exclusion (reason: ${reason}; expires: ${formatModelExclusionExpiry(exclusion.expiresAt)}).`);
 	};
 	if (origin === "explicit" && primaryModel) {
@@ -518,12 +527,12 @@ export function buildModelCandidates(
 				: "";
 			throw new Error(`${ZERO_USABLE_MODEL_CANDIDATES_ERROR}${evidence}`);
 		}
-		return resolved;
+		return { candidates: resolved, ...(requestedModel ? { requestedModel } : {}), ...(skippedModels.length ? { skippedModels } : {}) };
 	}
 	if (skippedPrimary) {
 		console.warn(`[pi-subagents] Skipping primary model '${skippedPrimary}' because it is unavailable in this environment.`);
 	}
-	return resolved;
+	return { candidates: resolved, ...(requestedModel ? { requestedModel } : {}), ...(skippedModels.length ? { skippedModels } : {}) };
 }
 
 const RETRYABLE_MODEL_FAILURE_PATTERNS = [

@@ -21,6 +21,7 @@ import { ACTIVE_ASYNC_CAPACITY_DIR, acquireActiveAsyncCapacity, activeAsyncCapac
 import { readPendingChainAppendRequests } from "../../src/runs/background/chain-append.ts";
 import { createRunFanoutBudget, getRunFanoutBudgetSnapshot, writeRunFanoutBudgetDescriptor } from "../../src/runs/shared/run-fanout-budget.ts";
 import { deriveForkPromptCacheKey } from "../../src/runs/shared/child-tool-plan.ts";
+import { clearExclusions, recordModelFailure } from "../../src/runs/shared/model-exclusions.ts";
 import type { AsyncExecutionResult, AsyncResultPayload, AsyncStatusPayload } from "../support/async-execution-fixture.ts";
 import {
 	installAsyncExecutionHooks, waitForMockPiRuntime, available, isAsyncAvailable,
@@ -1586,6 +1587,7 @@ export default function() {
 	});
 
 	it("background forked runs use an available fallback when the configured primary is unavailable", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
+		recordModelFailure({ modelId: "primary", provider: "mock", reason: "quota exhausted", ttlMs: 60_000 });
 		mockPi.onCall({ output: "Forked async work" });
 		const parentSessionFile = path.join(tempDir, "parent-pruned-fallback.jsonl");
 		const forkedSessionFile = path.join(tempDir, "forked-pruned-fallback.jsonl");
@@ -1597,6 +1599,7 @@ export default function() {
 			...makeMinimalCtx(tempDir),
 			modelRegistry: {
 				getAvailable: () => [
+					{ provider: "mock", id: "primary" },
 					{ provider: "mock", id: "fallback" },
 					pruner,
 				],
@@ -1612,7 +1615,7 @@ export default function() {
 		};
 		const launch = await makeAsyncExecutor([
 			makeAgent("worker", {
-				model: "mock/missing-primary",
+				model: "mock/primary",
 				fallbackModels: ["mock/fallback"],
 				completionGuard: false,
 			}),
@@ -1623,13 +1626,22 @@ export default function() {
 			undefined,
 			ctx,
 		) as AsyncExecutionResult;
-		assert.ok(!launch.isError, launch.content[0]?.text);
-		assert.ok(launch.details.asyncId);
-		const payload = await readAsyncPayload(launch.details.asyncId);
-		assert.equal(payload.results[0]?.model, "mock/fallback");
-		assert.deepEqual(payload.results[0]?.attemptedModels, ["mock/fallback"]);
-		const args = readMockPiArgs(mockPi, 0);
-		assert.equal(args[args.indexOf("--model") + 1], "mock/fallback");
+		try {
+			assert.ok(!launch.isError, launch.content[0]?.text);
+			assert.ok(launch.details.asyncId);
+			const payload = await readAsyncPayload(launch.details.asyncId);
+			const child = payload.results[0] as typeof payload.results[number] & { requestedModel?: string; skippedModels?: Array<{ model: string; reason: string; expiresAt?: number }> };
+			assert.equal(child.model, "mock/fallback");
+			assert.equal(child.requestedModel, "mock/primary");
+			assert.equal(child.skippedModels?.[0]?.model, "mock/primary");
+			assert.equal(child.skippedModels?.[0]?.reason, "quota exhausted");
+			assert.ok((child.skippedModels?.[0]?.expiresAt ?? 0) > Date.now());
+			assert.deepEqual(child.attemptedModels, ["mock/fallback"]);
+			const args = readMockPiArgs(mockPi, 0);
+			assert.equal(args[args.indexOf("--model") + 1], "mock/fallback");
+		} finally {
+			clearExclusions();
+		}
 	});
 
 	it("revival preserves captured response aliases and their absence after config changes", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {

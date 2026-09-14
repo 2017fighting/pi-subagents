@@ -1073,13 +1073,18 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const agentContract = s.agentContract ?? params.agentContract;
 		const permissionRules = resolvePermissionRules(ctx.permissions, a.permissions);
 		let modelCandidates: string[] = [];
+		let requestedModel: string | undefined;
+		let skippedModels: import("../../shared/types.ts").SkippedModel[] | undefined;
 		if (!externalRunner) {
 			try {
-				modelCandidates = buildModelCandidates(primaryModel, a.fallbackModels, availableModels, a.modelProvider ?? ctx.currentModelProvider, {
+				const modelEvidence = buildModelCandidates(primaryModel, a.fallbackModels, availableModels, a.modelProvider ?? ctx.currentModelProvider, {
 					scope: modelScopes,
 					primaryModelFromParent,
 					origin: modelOrigin,
-				}).flatMap((candidate) => {
+				});
+				requestedModel = modelEvidence.requestedModel;
+				skippedModels = modelEvidence.skippedModels;
+				modelCandidates = modelEvidence.candidates.flatMap((candidate) => {
 					const resolved = applyThinkingSuffix(candidate, effectiveThinking, thinkingOverride !== undefined);
 					return resolved ? [resolved] : [];
 				});
@@ -1157,6 +1162,8 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			...(thinkingCeiling ? { thinkingCeiling } : {}),
 			launchResolvedExtensions,
 			modelCandidates: externalRunner ? undefined : modelCandidates,
+			...(requestedModel ? { requestedModel } : {}),
+			...(skippedModels ? { skippedModels } : {}),
 			...(primaryModelFromParent ? { skipPrimaryModelVerification: true } : {}),
 			...(availableModels && availableModels.length > 0 ? { modelVerificationRegistry: availableModels } : {}),
 			...(ctx.modelResponseAliases ? { modelResponseAliases: ctx.modelResponseAliases } : {}),
@@ -1888,13 +1895,18 @@ export function executeAsyncSingle(
 		? createStructuredOutputRuntime(params.structuredOutputSchema, path.join(asyncDir, "structured-output"), { acceptanceReport: resolveAcceptanceReportMode(params.acceptance) })
 		: undefined;
 	let modelCandidates: string[] = [];
+	let requestedModel: string | undefined;
+	let skippedModels: import("../../shared/types.ts").SkippedModel[] | undefined;
 	if (!externalRunner) {
 		try {
-			modelCandidates = buildModelCandidates(primaryModel, agentConfig.fallbackModels, availableModels, agentConfig.modelProvider ?? ctx.currentModelProvider, {
+			const modelEvidence = buildModelCandidates(primaryModel, agentConfig.fallbackModels, availableModels, agentConfig.modelProvider ?? ctx.currentModelProvider, {
 				scope: modelScopes,
 				primaryModelFromParent: modelOrigin === "inherited",
 				origin: modelOrigin,
-			}).flatMap((candidate) => {
+			});
+			requestedModel = modelEvidence.requestedModel;
+			skippedModels = modelEvidence.skippedModels;
+			modelCandidates = modelEvidence.candidates.flatMap((candidate) => {
 				const resolved = applyThinkingSuffix(candidate, effectiveThinking, params.thinkingOverride !== undefined);
 				return resolved ? [resolved] : [];
 			});
@@ -2059,6 +2071,8 @@ export function executeAsyncSingle(
 						thinking: resolveEffectiveThinking(model, effectiveThinking),
 						...(thinkingCeiling ? { thinkingCeiling } : {}),
 						modelCandidates,
+						...(requestedModel ? { requestedModel } : {}),
+						...(skippedModels ? { skippedModels } : {}),
 						...(modelOrigin === "inherited" ? { skipPrimaryModelVerification: true } : {}),
 						...(availableModels && availableModels.length > 0 ? { modelVerificationRegistry: availableModels } : {}),
 						...(ctx.modelResponseAliases ? { modelResponseAliases: ctx.modelResponseAliases } : {}),

@@ -23,6 +23,8 @@ export interface ImportedAsyncRootResult {
 	sessionFile?: string;
 	intercomTarget?: string;
 	model?: string;
+	requestedModel?: string;
+	skippedModels?: import("../../shared/types.ts").SkippedModel[];
 	attemptedModels?: string[];
 	modelAttempts?: ModelAttempt[];
 	contextOverflow?: boolean;
@@ -65,6 +67,8 @@ interface AsyncResultFile {
 		sessionFile?: string;
 		intercomTarget?: string;
 		model?: string;
+		requestedModel?: string;
+		skippedModels?: import("../../shared/types.ts").SkippedModel[];
 		attemptedModels?: string[];
 		modelAttempts?: ModelAttempt[];
 		contextOverflow?: boolean;
@@ -168,6 +172,8 @@ function outputFromTerminalStatus(root: ImportedAsyncRoot, status: AsyncStatus, 
 		...(step?.sessionName ? { sessionName: step.sessionName } : {}),
 		...(step?.sessionFile ?? status.sessionFile ? { sessionFile: step?.sessionFile ?? status.sessionFile } : {}),
 		...(step?.model ? { model: step.model } : {}),
+		...(step?.requestedModel ? { requestedModel: step.requestedModel } : {}),
+		...(step?.skippedModels ? { skippedModels: step.skippedModels } : {}),
 		...(step?.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
 		...(step?.modelAttempts ? { modelAttempts: step.modelAttempts } : {}),
 		...(step?.contextOverflow ? { contextOverflow: true } : {}),
@@ -196,6 +202,8 @@ function outputFromTimeout(root: ImportedAsyncRoot, status: AsyncStatus | null, 
 		...(step?.sessionName ? { sessionName: step.sessionName } : {}),
 		...(step?.sessionFile ?? status?.sessionFile ? { sessionFile: step?.sessionFile ?? status?.sessionFile } : {}),
 		...(step?.model ? { model: step.model } : {}),
+		...(step?.requestedModel ? { requestedModel: step.requestedModel } : {}),
+		...(step?.skippedModels ? { skippedModels: step.skippedModels } : {}),
 		...(step?.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
 		...(step?.modelAttempts ? { modelAttempts: step.modelAttempts } : {}),
 		...(step?.contextOverflow ? { contextOverflow: true } : {}),
@@ -233,6 +241,8 @@ function buildImportedResult(root: ImportedAsyncRoot, status: AsyncStatus | null
 		...(child?.sessionFile ?? step?.sessionFile ?? status?.sessionFile ? { sessionFile: child?.sessionFile ?? step?.sessionFile ?? status?.sessionFile } : {}),
 		...(child?.intercomTarget ? { intercomTarget: child.intercomTarget } : {}),
 		...(child?.model ?? step?.model ? { model: child?.model ?? step?.model } : {}),
+		...(child?.requestedModel ?? step?.requestedModel ? { requestedModel: child?.requestedModel ?? step?.requestedModel } : {}),
+		...(child?.skippedModels ?? step?.skippedModels ? { skippedModels: child?.skippedModels ?? step?.skippedModels } : {}),
 		...(child?.attemptedModels ?? step?.attemptedModels ? { attemptedModels: child?.attemptedModels ?? step?.attemptedModels } : {}),
 		...(child?.modelAttempts ?? step?.modelAttempts ? { modelAttempts: child?.modelAttempts ?? step?.modelAttempts } : {}),
 		...(child?.contextOverflow || step?.contextOverflow ? { contextOverflow: true } : {}),

@@ -184,7 +184,7 @@ describe("model fallback helpers", () => {
 
 	it("builds a deduplicated ordered candidate list", () => {
 		assert.deepEqual(
-			buildModelCandidates("gpt-5-mini", ["openai/gpt-5-mini", "anthropic/claude-sonnet-4", "gpt-5-mini"], availableModels),
+			buildModelCandidates("gpt-5-mini", ["openai/gpt-5-mini", "anthropic/claude-sonnet-4", "gpt-5-mini"], availableModels).candidates,
 			["openai/gpt-5-mini", "anthropic/claude-sonnet-4"],
 		);
 	});
@@ -195,10 +195,12 @@ describe("model fallback helpers", () => {
 		console.warn = (message: unknown) => warnings.push(String(message));
 		try {
 			recordRetryableModelFailure("openai/gpt-5-mini", "rate limit exceeded for Bearer secret-token-value");
-			assert.deepEqual(
-				buildModelCandidates("gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels),
-				["anthropic/claude-sonnet-4"],
-			);
+			const evidence = buildModelCandidates("gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels);
+			assert.deepEqual(evidence.candidates, ["anthropic/claude-sonnet-4"]);
+			assert.equal(evidence.requestedModel, "gpt-5-mini");
+			assert.equal(evidence.skippedModels?.[0]?.model, "openai/gpt-5-mini");
+			assert.equal(evidence.skippedModels?.[0]?.reason, "rate limit exceeded for [redacted]");
+			assert.ok((evidence.skippedModels?.[0]?.expiresAt ?? 0) > Date.now());
 		} finally {
 			console.warn = originalWarn;
 		}
@@ -211,7 +213,7 @@ describe("model fallback helpers", () => {
 		recordRetryableModelFailure("openai/gpt-5-mini", "bash failed (exit 1): command not found");
 
 		assert.deepEqual(
-			buildModelCandidates("gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels),
+			buildModelCandidates("gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels).candidates,
 			["openai/gpt-5-mini", "anthropic/claude-sonnet-4"],
 		);
 	});
@@ -234,7 +236,7 @@ describe("model fallback helpers", () => {
 			recordRetryableModelFailure(model, error);
 			assert.equal(findModelExclusion(model), undefined, error);
 			assert.equal(getExcludedCount(), 0, error);
-			assert.deepEqual(buildModelCandidates(model, undefined, availableModels), [model], error);
+			assert.deepEqual(buildModelCandidates(model, undefined, availableModels).candidates, [model], error);
 		}
 	});
 
@@ -254,7 +256,7 @@ describe("model fallback helpers", () => {
 		recordRetryableModelFailure(model, error);
 		assert.equal(findModelExclusion(model), undefined);
 		assert.equal(getExcludedCount(), 0);
-		assert.deepEqual(buildModelCandidates(model, undefined, undefined), [model]);
+		assert.deepEqual(buildModelCandidates(model, undefined, undefined).candidates, [model]);
 	});
 
 	it("does not cache request-shape errors despite retryable upstream prose", () => {
@@ -376,7 +378,7 @@ describe("model fallback helpers", () => {
 			{ provider: "github-copilot", id: "gpt-5-mini", fullId: "github-copilot/gpt-5-mini" },
 		];
 		assert.deepEqual(
-			buildModelCandidates("gpt-5-mini", ["gpt-5-mini", "anthropic/claude-sonnet-4"], ambiguous, "github-copilot"),
+			buildModelCandidates("gpt-5-mini", ["gpt-5-mini", "anthropic/claude-sonnet-4"], ambiguous, "github-copilot").candidates,
 			["github-copilot/gpt-5-mini", "anthropic/claude-sonnet-4"],
 		);
 	});
@@ -387,7 +389,7 @@ describe("model fallback helpers", () => {
 		console.warn = (message: unknown) => warnings.push(String(message));
 		try {
 			assert.deepEqual(
-				buildModelCandidates("gpt-5-mini", ["does-not-exist", "also-unavailable"], availableModels),
+				buildModelCandidates("gpt-5-mini", ["does-not-exist", "also-unavailable"], availableModels).candidates,
 				["openai/gpt-5-mini"],
 			);
 		} finally {
@@ -405,7 +407,7 @@ describe("model fallback helpers", () => {
 		console.warn = (message: unknown) => warnings.push(String(message));
 		try {
 			assert.deepEqual(
-				buildModelCandidates("does-not-exist", ["anthropic/claude-sonnet-4"], availableModels),
+				buildModelCandidates("does-not-exist", ["anthropic/claude-sonnet-4"], availableModels).candidates,
 				["anthropic/claude-sonnet-4"],
 			);
 		} finally {
@@ -458,7 +460,7 @@ describe("model fallback helpers", () => {
 
 	it("keeps eligible fallbacks after a valid explicit primary", () => {
 		assert.deepEqual(
-			buildModelCandidates("openai/gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels, undefined, { origin: "explicit" }),
+			buildModelCandidates("openai/gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels, undefined, { origin: "explicit" }).candidates,
 			["openai/gpt-5-mini", "anthropic/claude-sonnet-4"],
 		);
 	});
@@ -469,7 +471,7 @@ describe("model fallback helpers", () => {
 			provider: "openai",
 			reason: 'Model "openai/gpt-5-mini" not found. Use --list-models to see available models.',
 		});
-		assert.deepEqual(buildModelCandidates("openai/gpt-5-mini", undefined, availableModels), ["openai/gpt-5-mini"]);
+		assert.deepEqual(buildModelCandidates("openai/gpt-5-mini", undefined, availableModels).candidates, ["openai/gpt-5-mini"]);
 	});
 
 	it("keeps provider-wide exclusions when ignoring a stale model-not-found entry", () => {
@@ -574,7 +576,7 @@ describe("model fallback helpers", () => {
 
 	it("trusts an inherited parent model outside the registry", () => {
 		assert.deepEqual(
-			buildModelCandidates("gateway/parent-model", undefined, availableModels, undefined, { primaryModelFromParent: true }),
+			buildModelCandidates("gateway/parent-model", undefined, availableModels, undefined, { primaryModelFromParent: true }).candidates,
 			["gateway/parent-model"],
 		);
 		assert.throws(
@@ -1161,7 +1163,7 @@ describe("resolveSubagentModelOverride scope enforcement", () => {
 			scope,
 			onWarn: (v) => warnings.push(v.message),
 		});
-		assert.deepEqual(candidates, ["openai/gpt-5-mini", "deepseek/deepseek-v4"]);
+		assert.deepEqual(candidates.candidates, ["openai/gpt-5-mini", "deepseek/deepseek-v4"]);
 		assert.equal(warnings.length, 1);
 		assert.match(warnings[0]!, /deepseek\/deepseek-v4/);
 	});

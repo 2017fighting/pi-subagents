@@ -13,6 +13,7 @@
 
 ### Added
 
+- Expose the requested model and cached-exclusion skips in foreground results and async status, so audits can distinguish an intended primary from the fallback that actually ran. Thanks to [@mxp7064](https://github.com/mxp7064) for the report and design in #2245.
 - Accept bounded plain-JSON `args` for inline, file-backed, validated, and scheduled workflow scripts. Scripts receive deeply frozen arguments; schedules retain normalized values for replay, and workflow evidence binds them to a canonical digest (#2233).
 - Left-click the async widget header in mouse-enabled Pi fullscreen mode to fold it into a live status summary and unfold it again, independently of global tool expansion. Progress updates preserve the fold state; run execution and notifications are unchanged. Thanks to [@pstanton237](https://github.com/pstanton237) for #2235.
 - Allow agents to declare an inline JSON Schema `outputSchema` default, with launch objects overriding it and explicit `false` opting out. Thanks to [@peedrr](https://github.com/peedrr) for #2180.

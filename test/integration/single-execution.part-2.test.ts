@@ -2707,6 +2707,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(result.usage.turns, 1);
 		assert.equal(result.usage.input, 100); // from mock
 		assert.equal(result.usage.output, 50); // from mock
+		assert.equal(result.skippedModels, undefined);
 	});
 
 	it("retries with fallback models on retryable provider failures", async () => {
@@ -2741,6 +2742,37 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(result.modelAttempts?.[1]?.success, true);
 		assert.equal(result.usage.turns, 2);
 		assert.equal(mockPi.callCount(), 2);
+	});
+
+	it("records requested models and cached exclusions in foreground results and metadata", async () => {
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "quota exhausted", ttlMs: 60_000 });
+		mockPi.onCall({ output: "Used fallback" });
+		const artifactsDir = path.join(tempDir, "requested-model-artifacts");
+		try {
+			const result = await runSync(tempDir, [makeAgent("echo", {
+				model: "openai/gpt-5-mini",
+				fallbackModels: ["anthropic/claude-sonnet-4"],
+			})], "echo", "Task", {
+				runId: "requested-model-evidence-sync",
+				artifactsDir,
+				artifactConfig: { enabled: true, includeInput: false, includeOutput: false, includeMetadata: true },
+				availableModels: [
+					{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
+					{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
+				],
+			});
+			assert.equal(result.requestedModel, "openai/gpt-5-mini");
+			assert.equal(result.skippedModels?.[0]?.model, "openai/gpt-5-mini");
+			assert.equal(result.skippedModels?.[0]?.reason, "quota exhausted");
+			assert.ok((result.skippedModels?.[0]?.expiresAt ?? 0) > Date.now());
+			assert.deepEqual(result.attemptedModels, ["anthropic/claude-sonnet-4"]);
+			assert.ok(result.artifactPaths?.metadataPath);
+			const metadata = JSON.parse(fs.readFileSync(result.artifactPaths.metadataPath, "utf-8")) as Pick<typeof result, "requestedModel" | "skippedModels">;
+			assert.equal(metadata.requestedModel, result.requestedModel);
+			assert.deepEqual(metadata.skippedModels, result.skippedModels);
+		} finally {
+			clearExclusions();
+		}
 	});
 
 	it("retries with fallback models when provider errors exit zero", async () => {

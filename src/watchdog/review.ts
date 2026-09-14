@@ -260,6 +260,7 @@ export function createMainWatchdogReview(provider: WatchdogContextProvider, opti
 		const candidates = request.config.main.fallbackModels?.length
 			? buildModelCandidates(request.config.main.model ?? inherited, request.config.main.fallbackModels,
 				ctx.modelRegistry.getAvailable().map(toModelInfo), ctx.model?.provider, { primaryModelFromParent: Boolean(inherited) })
+				.candidates
 			: [request.config.main.model];
 		for (let index = 0; index < candidates.length; index++) {
 			if (aborted()) return { stopReason: "aborted" };

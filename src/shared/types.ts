@@ -1010,6 +1010,12 @@ export interface ModelAttempt {
 	usage?: Usage;
 }
 
+export interface SkippedModel {
+	model: string;
+	reason: string;
+	expiresAt?: number;
+}
+
 export type AcceptanceLevel = "auto" | "none" | "attested" | "checked" | "verified";
 
 export type AcceptanceEvidenceKind =
@@ -1277,6 +1283,8 @@ export interface SingleResult {
 	nativeMachine?: { provider: "herdr"; machineId: string; initialGit?: HerdrRemoteGitStatus; finalGit?: HerdrRemoteGitStatus };
 	/** Effective thinking level used by this foreground child, when known. */
 	thinking?: string;
+	requestedModel?: string;
+	skippedModels?: SkippedModel[];
 	attemptedModels?: string[];
 	modelAttempts?: ModelAttempt[];
 	controlEvents?: ControlEvent[];
@@ -1974,6 +1982,8 @@ export interface AsyncStatus {
 		thinking?: string;
 		contextLimit?: number;
 		thinkingCeiling?: ThinkingLevel;
+		requestedModel?: string;
+		skippedModels?: SkippedModel[];
 		attemptedModels?: string[];
 		modelAttempts?: ModelAttempt[];
 		/** True when the child input exceeded the model context window. */

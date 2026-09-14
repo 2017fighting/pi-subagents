@@ -391,7 +391,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 			scope: modelScopes,
 			primaryModelFromParent: modelOrigin === "inherited" || inheritsParentModel(input.model, agent.model, input.parentModel),
 			origin: modelOrigin,
-		})
+		}).candidates
 			.map((candidate) => applyThinkingSuffix(candidate, effectiveThinkingConfig, input.thinking !== undefined) ?? candidate);
 	if (!externalRunner) {
 		try {

@@ -267,6 +267,8 @@ interface StepResult {
 	model?: string;
 	nativeMachine?: import("../../shared/types.ts").SingleResult["nativeMachine"];
 	thinking?: string;
+	requestedModel?: string;
+	skippedModels?: import("../../shared/types.ts").SkippedModel[];
 	attemptedModels?: string[];
 	modelAttempts?: ModelAttempt[];
 	/** True when the dispatch failed because the input exceeded the model's context window. */
@@ -821,6 +823,8 @@ export async function runSingleStepInner(
 				sessionFile: imported.sessionFile,
 				intercomTarget: imported.intercomTarget,
 				model: imported.model,
+				requestedModel: imported.requestedModel,
+				skippedModels: imported.skippedModels,
 				attemptedModels: imported.attemptedModels,
 				modelAttempts: imported.modelAttempts,
 				contextOverflow: imported.contextOverflow,
@@ -1684,6 +1688,8 @@ export async function runSingleStepInner(
 				exitCode: effectiveFinalExitCode,
 				model: finalResult?.model,
 				nativeMachine: finalResult?.nativeMachine,
+				requestedModel: step.requestedModel,
+				skippedModels: step.skippedModels,
 				attemptedModels: attemptedModels.length > 0 ? attemptedModels : undefined,
 				modelAttempts,
 				usage,
@@ -1716,6 +1722,8 @@ export async function runSingleStepInner(
 		model: finalResult?.model,
 		nativeMachine: finalResult?.nativeMachine,
 		thinking: resolveEffectiveThinking(finalResult?.model, step.thinking),
+		requestedModel: step.requestedModel,
+		skippedModels: step.skippedModels,
 		attemptedModels: attemptedModels.length > 0 ? attemptedModels : undefined,
 		modelAttempts,
 		contextOverflow: contextOverflow || undefined,
@@ -2127,6 +2135,8 @@ export async function runSubagent(
 					model: task.model,
 					...(task.contextLimit !== undefined ? { contextLimit: task.contextLimit } : {}),
 					thinking: task.thinking,
+					requestedModel: task.requestedModel,
+					skippedModels: task.skippedModels,
 					attemptedModels: task.modelCandidates && task.modelCandidates.length > 0 ? task.modelCandidates : task.model ? [task.model] : undefined,
 					recentTools: [],
 					recentOutput: [],
@@ -2181,6 +2191,8 @@ export async function runSubagent(
 				model: step.model,
 				...(step.contextLimit !== undefined ? { contextLimit: step.contextLimit } : {}),
 				thinking: step.thinking,
+				requestedModel: step.requestedModel,
+				skippedModels: step.skippedModels,
 				attemptedModels: step.modelCandidates && step.modelCandidates.length > 0 ? step.modelCandidates : step.model ? [step.model] : undefined,
 				recentTools: [],
 				recentOutput: [],
@@ -2408,6 +2420,8 @@ export async function runSubagent(
 				sessionFile: step.sessionFile,
 				model: step.model,
 				thinking: step.thinking,
+				requestedModel: step.requestedModel,
+				skippedModels: step.skippedModels,
 				attemptedModels: step.attemptedModels,
 				modelAttempts: step.modelAttempts,
 				usage: usageFromAttempts(step.modelAttempts),
@@ -3813,6 +3827,8 @@ export async function runSubagent(
 					...(task.contextLimit !== undefined ? { contextLimit: task.contextLimit } : {}),
 					...(task.thinking ? { thinking: task.thinking } : {}),
 					...(task.thinkingCeiling ? { thinkingCeiling: task.thinkingCeiling } : {}),
+					...(task.requestedModel ? { requestedModel: task.requestedModel } : {}),
+					...(task.skippedModels ? { skippedModels: task.skippedModels } : {}),
 					...(task.modelCandidates && task.modelCandidates.length > 0 ? { attemptedModels: task.modelCandidates } : task.model ? { attemptedModels: [task.model] } : {}),
 					recentTools: [],
 					recentOutput: [],
@@ -3966,6 +3982,8 @@ export async function runSubagent(
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "sessionName", singleResult.sessionName);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "model", singleResult.model);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, fi).thinking));
+				setOptionalProperty(requiredStatusStep(statusPayload, fi), "requestedModel", singleResult.requestedModel);
+				setOptionalProperty(requiredStatusStep(statusPayload, fi), "skippedModels", singleResult.skippedModels);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "attemptedModels", singleResult.attemptedModels);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "modelAttempts", singleResult.modelAttempts);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "contextOverflow", singleResult.contextOverflow);
@@ -4036,6 +4054,8 @@ export async function runSubagent(
 					intercomTarget: pr.intercomTarget,
 					model: pr.model,
 					thinking: pr.thinking,
+					requestedModel: pr.requestedModel,
+					skippedModels: pr.skippedModels,
 					attemptedModels: pr.attemptedModels,
 					modelAttempts: pr.modelAttempts,
 					contextOverflow: pr.contextOverflow,
@@ -4388,6 +4408,8 @@ export async function runSubagent(
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "sessionName", singleResult.sessionName);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "model", singleResult.model);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, fi).thinking));
+						setOptionalProperty(requiredStatusStep(statusPayload, fi), "requestedModel", singleResult.requestedModel);
+						setOptionalProperty(requiredStatusStep(statusPayload, fi), "skippedModels", singleResult.skippedModels);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "attemptedModels", singleResult.attemptedModels);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "modelAttempts", singleResult.modelAttempts);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "contextOverflow", singleResult.contextOverflow);
@@ -4499,6 +4521,8 @@ export async function runSubagent(
 						intercomTarget: pr.intercomTarget,
 						model: pr.model,
 						thinking: pr.thinking,
+						requestedModel: pr.requestedModel,
+						skippedModels: pr.skippedModels,
 						attemptedModels: pr.attemptedModels,
 						modelAttempts: pr.modelAttempts,
 						contextOverflow: pr.contextOverflow,
@@ -4539,6 +4563,8 @@ export async function runSubagent(
 						exitCode: r.exitCode,
 						error: r.error,
 						model: r.model,
+						requestedModel: r.requestedModel,
+						skippedModels: r.skippedModels,
 						attemptedModels: r.attemptedModels,
 					})),
 				);
@@ -4798,6 +4824,8 @@ export async function runSubagent(
 				intercomTarget: singleResult.intercomTarget,
 				model: singleResult.model,
 				thinking: singleResult.thinking,
+				requestedModel: singleResult.requestedModel,
+				skippedModels: singleResult.skippedModels,
 				attemptedModels: singleResult.attemptedModels,
 				modelAttempts: singleResult.modelAttempts,
 				contextOverflow: singleResult.contextOverflow,
@@ -4884,6 +4912,8 @@ export async function runSubagent(
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "sessionName", singleResult.sessionName);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "model", singleResult.model);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, flatIndex).thinking));
+			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "requestedModel", singleResult.requestedModel);
+			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "skippedModels", singleResult.skippedModels);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "attemptedModels", singleResult.attemptedModels);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "modelAttempts", singleResult.modelAttempts);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "contextOverflow", singleResult.contextOverflow);
@@ -5208,6 +5238,8 @@ export async function runSubagent(
 				intercomTarget: r.intercomTarget,
 				model: r.model,
 				thinking: r.thinking,
+				requestedModel: r.requestedModel,
+				skippedModels: r.skippedModels,
 				attemptedModels: r.attemptedModels,
 				modelAttempts: r.modelAttempts,
 				contextOverflow: r.contextOverflow,
