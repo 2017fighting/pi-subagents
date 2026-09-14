@@ -43,6 +43,7 @@
 - Stop registering and advertising a default global `Ctrl+Alt+F` Fleet shortcut; `/subagents-fleet` and FleetView remain available. Thanks to [@miaomiaozii](https://github.com/miaomiaozii) for #2196.
 - Require explicit low/medium/high importance on watchdog findings: low and medium now persist in user-only transcript entries and are excluded from model context and parent-facing child results, while high findings retain model-visible delivery. Severity continues to govern blocker acceptance independently (#2201).
 - Let headless parent and nested coordinator sessions answer blocking child supervisor requests without deadlocking their final background-work drain. Thanks to [@ProDrifterDK](https://github.com/ProDrifterDK) for #2185.
+- Keep nested stop, interrupt, and timeout propagation inside the issuing run's descendant subtree while preserving root-wide controls. Thanks to [@freezscholte](https://github.com/freezscholte) for #2243.
 - Keep inferred read-only reviews free of implementation acceptance requirements when their topic includes release, migration, or security; explicit acceptance and actual write tasks retain their gates. Thanks to [@qsgy-edge](https://github.com/qsgy-edge) for #2191.
 - Include retention-managed async, output-artifact, and structured-output retrieval paths in native completion notices. Thanks to [@peedrr](https://github.com/peedrr) for #2181.
 - Remove workflow-owned one-shot result payloads together with their child-local result indexes after successful consumption. Thanks to [@peedrr](https://github.com/peedrr) for #2182.
