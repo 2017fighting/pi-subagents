@@ -9,7 +9,7 @@
 - Reuse workflow scripts with different JSON inputs, including scheduled runs.
 - Start npm-installed children much faster and let slow local models use Pi's configured HTTP timeout.
 - Keep local foreground children on the same extension-provided models as their parent without sharing provider state between sessions.
-- Get simpler, more predictable failures: each launch uses one resolved model instead of switching models automatically.
+- Ask async agents to checkpoint before a hard deadline, giving long-running work a chance to return useful progress instead of being killed.
 
 ### Added
 
