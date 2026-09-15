@@ -495,7 +495,7 @@ function getGlobalNpmRoot(): string | null {
 	}
 
 	try {
-		cachedGlobalNpmRoot = fs.realpathSync(execSync("npm root -g", { encoding: "utf-8", timeout: 5000, windowsHide: true }).trim());
+		cachedGlobalNpmRoot = fs.realpathSync(execSync("npm root -g", { encoding: "utf-8", timeout: 5000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] }).trim());
 		return cachedGlobalNpmRoot;
 	} catch {
 		cachedGlobalNpmRoot = "";
