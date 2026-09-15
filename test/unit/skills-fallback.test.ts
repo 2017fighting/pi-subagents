@@ -412,6 +412,7 @@ describe("skills filesystem fallback", () => {
 			env: {
 				...process.env,
 				PATH: emptyBinDir,
+				PI_OFFLINE: "",
 			},
 			encoding: "utf-8",
 		});
