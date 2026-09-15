@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The Ghostty inspector no longer takes over when `TERM_PROGRAM=ghostty` comes from a terminal that embeds the Ghostty kernel (such as cmux) instead of the standalone Ghostty app. Availability now requires the macOS host bundle id (`__CFBundleIdentifier`) to identify Ghostty itself; absent or different host identity declines to the `inspector.command` hint instead of targeting an unrelated Ghostty window or emitting `-1728`/`-2741` AppleScript errors. Thanks to [@wangpi26](https://github.com/wangpi26) for #2281.
+
 ## [0.68.0] - 2026-09-15
 
 ### Highlights
