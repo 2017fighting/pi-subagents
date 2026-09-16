@@ -362,6 +362,31 @@ test("viewer strips split terminal control sequences across poll ticks", { skip:
 	assert.doesNotMatch(output, /\u001b|31m|secret|title|\u0000|\u0001|\r|\t|\u007f/);
 });
 
+test("viewer one-liner survives shells that collapse backslashes inside single quotes", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
+	const dir = tempDir();
+	const capture = path.join(dir, "capture.json");
+	const fakeOrca = writeCaptureOrca(dir);
+	const tab = createOrcaProgressTab({
+		cwd: dir,
+		runId: "progress-fish-quoting",
+		agent: "worker",
+		index: 0,
+		config: { enabled: true },
+		command: fakeOrca,
+		env: { ...process.env, ORCA_TEST_CAPTURE: capture },
+	});
+	assert.ok(tab);
+	await waitForFile(capture);
+	const args = JSON.parse(fs.readFileSync(capture, "utf-8")) as string[];
+	const viewer = args[args.indexOf("--command") + 1]!;
+	// Orca runs --command through the user's login shell. fish collapses `\\`
+	// inside single quotes to `\`, so a backslash in the viewer one-liner reaches
+	// `node -e` as different source (unterminated string literal) and every progress
+	// tab opens on a SyntaxError instead of the mirror.
+	assert.equal(viewer.includes("\\"), false);
+	await tab.finish("failed");
+});
+
 test("mirror output keeps small writes that hit stream backpressure before the byte limit", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
 	const dir = tempDir();
 	const capture = path.join(dir, "capture.json");
