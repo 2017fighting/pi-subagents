@@ -91,7 +91,7 @@ import {
 import { acceptanceFailureMessage, buildSkippedAcceptanceLedger, captureStagedIndexBaseline, evaluateAcceptance, formatAcceptancePrompt, resolveEffectiveAcceptance, stripAcceptanceReport, validateAcceptanceInput } from "../shared/acceptance.ts";
 import { PROMPT_REDACTED } from "../../shared/utils.ts";
 import { attachContractProjections, isAgentContract } from "../shared/agent-contract.ts";
-import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
+import { initialToolBudgetState, isToolBudgetBlockedMessage, toolBudgetState } from "../shared/tool-budget.ts";
 import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
 import { resolveLaunchBinding } from "../../shared/launch-contract.ts";
 import { consumeWorkflowChildPermit } from "../../shared/workflow-child-permit.ts";
@@ -1151,12 +1151,17 @@ async function runSingleAttempt(
 				}
 				result.messages!.push(evt.message);
 				const resultText = extractTextFromContent(evt.message.content);
-				if (options.toolBudget && resultText.includes("Tool budget hard limit reached")) {
+				// The result event's own tool name is authoritative; the single pending slot can
+				// describe a different, overlapping call and serves only as a fallback.
+				const blockedTool = (typeof toolResultCompletion.toolName === "string" && toolResultCompletion.toolName.length > 0
+					? toolResultCompletion.toolName
+					: undefined) ?? pendingToolResult?.tool;
+				if (options.toolBudget && isToolBudgetBlockedMessage(options.toolBudget, resultText, blockedTool)) {
 					result.toolBudgetBlocked = true;
 					result.toolBudget = toolBudgetState(
 						options.toolBudget,
 						Math.max(progress.toolCount, options.toolBudget.hard + 1),
-						pendingToolResult?.tool ?? (typeof toolResultCompletion.toolName === "string" ? toolResultCompletion.toolName : undefined),
+						blockedTool,
 					);
 				}
 				appendRecentOutput(progress, resultText.split("\n").slice(-10));
