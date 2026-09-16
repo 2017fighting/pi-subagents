@@ -1151,9 +1151,13 @@ async function runSingleAttempt(
 				}
 				result.messages!.push(evt.message);
 				const resultText = extractTextFromContent(evt.message.content);
-				if (options.toolBudget && pendingToolResult && resultText.includes("Tool budget hard limit reached")) {
+				if (options.toolBudget && resultText.includes("Tool budget hard limit reached")) {
 					result.toolBudgetBlocked = true;
-					result.toolBudget = toolBudgetState(options.toolBudget, progress.toolCount, pendingToolResult.tool);
+					result.toolBudget = toolBudgetState(
+						options.toolBudget,
+						Math.max(progress.toolCount, options.toolBudget.hard + 1),
+						pendingToolResult?.tool ?? (typeof toolResultCompletion.toolName === "string" ? toolResultCompletion.toolName : undefined),
+					);
 				}
 				appendRecentOutput(progress, resultText.split("\n").slice(-10));
 				const toolSnapshot = pendingToolResult;

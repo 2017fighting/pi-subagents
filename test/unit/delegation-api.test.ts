@@ -223,6 +223,41 @@ describe("public subagent delegation contract", () => {
 		bridge.dispose();
 	});
 
+	it("reports a blocked foreground tool attempt as tool_budget_exhausted", async () => {
+		const events = new FakeEvents();
+		const responses: SubagentDelegationResponse[] = [];
+		events.on(SUBAGENT_DELEGATION_RESPONSE_EVENT, (payload) => responses.push(payload as SubagentDelegationResponse));
+		const bridge = registerPromptTemplateDelegationBridge({
+			events,
+			getContext: () => ({ cwd: "/repo" }),
+			execute: async () => { throw new Error("legacy executor must remain separate"); },
+			executeStructured: async () => ({
+				details: {
+					mode: "single",
+					results: [{
+						agent: "reviewer",
+						exitCode: 0,
+						toolBudgetBlocked: true,
+						finalOutput: "The required tool was blocked.",
+						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 },
+					}],
+				},
+			}),
+		});
+		events.emit(SUBAGENT_DELEGATION_REQUEST_EVENT, { ...request, result: { kind: "text" as const } });
+		while (responses.length === 0) await tick();
+		assert.deepEqual(responses, [{
+			requestId: "attempt-1",
+			ownerRunId: "owner-1",
+			nodeId: "node-1",
+			status: "tool_budget_exhausted",
+			agent: "reviewer",
+			exitCode: 0,
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1, toolCalls: 0, durationMs: 0 },
+		} satisfies SubagentDelegationResponse]);
+		bridge.dispose();
+	});
+
 	it("suppresses unchanged structured delegation heartbeat snapshots", async () => {
 		const events = new FakeEvents();
 		const updates: SubagentDelegationUpdate[] = [];
