@@ -6,8 +6,8 @@ import { describe, it } from "node:test";
 import { createResultWatcher } from "../../src/runs/background/result-watcher.ts";
 import registerSubagentNotify from "../../src/runs/background/notify.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT, type SubagentState } from "../../src/shared/types.ts";
-import { makeMinimalCtx } from "../support/helpers.ts";
-import { installAsyncExecutionHooks, available, createSubagentExecutor, ASYNC_DIR, RESULTS_DIR, tempDir } from "../support/async-execution-fixture.ts";
+import { makeMinimalCtx, makeAgent, createEventBus, events } from "../support/helpers.ts";
+import { installAsyncExecutionHooks, available, createSubagentExecutor, ASYNC_DIR, RESULTS_DIR, tempDir, mockPi, readAsyncPayload, waitForAsyncState } from "../support/async-execution-fixture.ts";
 
 function barrier() {
 	let resolve!: () => void;
@@ -22,6 +22,62 @@ async function bounded(promise: Promise<unknown>) {
 
 describe("host workflow result publication", { skip: !available }, () => {
 	installAsyncExecutionHooks();
+	for (const background of [false, true]) it(`reports explicit async children as running after workflow dispatch (async=${background})`, async () => {
+		const release = path.join(tempDir, "release-child");
+		mockPi.onCall({ steps: [{ waitForPath: release, jsonl: [events.assistantMessage("Final child report")] }] });
+		const notices: Array<{ customType: string; content: string }> = [];
+		const state: SubagentState = { baseCwd: tempDir, currentSessionId: "session-123", completionOwnerId: "owner",
+			asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null,
+			cleanupTimers: new Map(), lastUiContext: null, poller: null, completionSeen: new Map(), watcher: null,
+			watcherRestartTimer: null, resultFileCoalescer: { schedule: () => false, clear() {} },
+		};
+		const pi = { events: createEventBus(), getSessionName: () => undefined, sendMessage(message: { customType: string; content: string }) { notices.push(message); } };
+		const executor = createSubagentExecutor!({ pi, state, config: {}, asyncByDefault: false, tempArtifactsDir: tempDir,
+			getSubagentSessionRoot: () => tempDir, expandTilde: (p: string) => p, discoverAgents: () => ({ agents: [makeAgent("worker", { completionGuard: false })] }),
+		});
+		const notifier = registerSubagentNotify(pi, state, { batchConfig: { enabled: false } });
+		let childId: string | undefined;
+		try {
+			const result = await executor.execute("dispatch-reporting", { async: background, mission: false,
+				workflowScript: 'return await runs.run("child", { agent: "worker", task: "Wait for fixture release", async: true });',
+			}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+			assert.notEqual(result.isError, true, result.content[0]?.text);
+			const payload = background ? await readAsyncPayload(result.details.asyncId!) : result.details;
+			const child = payload.workflow.value;
+			childId = child.runId;
+			assert.ok(childId);
+			assert.equal(JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, childId, "status.json"), "utf8")).state, "running");
+			assert.equal(fs.existsSync(path.join(RESULTS_DIR, `${childId}.json`)), false);
+			assert.equal(payload.workflowChildren.children[0].state, "running");
+			assert.equal(child.state, "running");
+			assert.equal(child.ok, false, "ok is reserved for successful child completion");
+			assert.equal(child.output, "");
+			assert.equal(child.error, undefined);
+			assert.equal(child.outputReference, undefined);
+			assert.equal(child.asyncDir, path.join(ASYNC_DIR, childId));
+			assert.equal(payload.workflow.trace.at(-1).state, "started");
+			assert.equal(notices.some((notice) => notice.customType === "subagent-incremental-child-notify"), false);
+			assert.match(background ? payload.summary : result.content[0].text, /dispatch completed.*1 child run\(s\) remain running/i);
+			if (background) {
+				assert.equal(payload.results[0].state, "running");
+				assert.equal(payload.results[0].success, undefined);
+				assert.equal(payload.results[0].outputState, "absent");
+				assert.equal(payload.results[0].artifactPaths?.outputPath, undefined);
+				await notifier.deliver({ ...payload, sessionId: state.currentSessionId, completionOwnerId: state.completionOwnerId });
+				assert.match(notices.at(-1)!.content, /dispatch complete/);
+				assert.match(notices.at(-1)!.content, /status=running/);
+			}
+		} finally {
+			fs.writeFileSync(release, "go");
+			if (childId) {
+				const final = await readAsyncPayload(childId);
+				assert.equal(final.success, true);
+				assert.equal(final.results[0].output, "Final child report");
+				await waitForAsyncState(childId, (status) => status.processTerminal?.state === "observed");
+			}
+			notifier.dispose();
+		}
+	});
 	for (const outcome of ["complete", "failed", "stopped", "index-error", "retry-error", "replacement-error"] as const) {
 	it(`retains real Darwin demand until deferred indexed workflow publication settles (${outcome})`, async () => {
 		const polled = barrier(), published = barrier(), delivered = barrier(), retired = barrier(), failed = barrier(), emitted = barrier();

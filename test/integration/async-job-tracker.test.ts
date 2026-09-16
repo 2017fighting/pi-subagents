@@ -9,7 +9,8 @@ import { ACTIVE_RUN_INDEX_DIR, updateActiveRunIndex } from "../../src/runs/backg
 import { EXTERNAL_JOB_BRIDGE_REQUEST_DIR } from "../../src/runs/shared/external-job-bridge.ts";
 import { createNativeSupervisorChannel, ensureSupervisorChannelDir, resolveSupervisorChannelDir } from "../../src/intercom/native-supervisor-channel.ts";
 import { SubagentFleetComponent } from "../../src/tui/fleet.ts";
-import { createNestedRoute } from "../../src/runs/shared/nested-events.ts";
+import { createNestedRoute, writeNestedEvent } from "../../src/runs/shared/nested-events.ts";
+import { resolveSubagentRunId } from "../../src/runs/background/run-id-resolver.ts";
 import { createTempDir, removeTempDir, tryImport } from "../support/helpers.ts";
 
 interface AsyncJobTrackerModule {
@@ -345,6 +346,28 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			assert.equal(ui.widgets.at(-1), undefined);
 		} finally {
 			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("retains nested lookup authority after async coordinator widget cleanup without crossing sessions", async () => {
+		const asyncRoot = createTempDir("pi-async-retained-lookup-");
+		const route = createNestedRoute("async-coordinator");
+		try {
+			const state = createState();
+			state.currentSessionId = "owner";
+			writeNestedEvent(route, { type: "subagent.nested.completed", ts: 100, parentRunId: route.rootRunId,
+				child: { id: "async-descendant", parentRunId: route.rootRunId, depth: 1, path: [{ runId: route.rootRunId }], state: "complete", agent: "worker" },
+			});
+			const tracker = createTracker(createEventRecorder().pi, state, asyncRoot, { completionRetentionMs: 5 });
+			tracker.handleStarted({ id: route.rootRunId, asyncDir: path.join(asyncRoot, route.rootRunId), agent: "worker", sessionId: "owner", nestedRoute: route });
+			tracker.handleComplete({ id: route.rootRunId, success: true, sessionId: "owner" });
+			await waitForCondition(() => !state.asyncJobs.has(route.rootRunId), "coordinator cleanup", 1000);
+			assert.equal(resolveSubagentRunId("async-descendant", { state })?.kind, "nested");
+			state.currentSessionId = "foreign";
+			assert.equal(resolveSubagentRunId("async-descendant", { state }), undefined);
+		} finally {
+			removeTempDir(asyncRoot);
+			fs.rmSync(path.dirname(route.eventSink), { recursive: true, force: true });
 		}
 	});
 

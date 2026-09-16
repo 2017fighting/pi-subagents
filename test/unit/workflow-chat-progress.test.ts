@@ -9,6 +9,7 @@ import { renderSubagentResult } from "../../src/tui/render.ts";
 import { bindMissionWorkflowChildAsyncLaunch, createSubagentExecutor, foregroundResultIntercomStatus, missionWorkflowChildStatus, runMissionWorkflowChild, shouldSuppressRoutineResultIntercom } from "../../src/runs/foreground/subagent-executor.ts";
 import { encodeIndexSegment } from "../../src/runs/background/index-segment.ts";
 import { readMissionBinding } from "../../src/missions/lifecycle.ts";
+import { nestedRunScope } from "../../src/runs/shared/nested-events.ts";
 import { createMission, readMission } from "../../src/missions/store.ts";
 import { DIRS, type Details, type SingleResult, type SubagentState } from "../../src/shared/types.ts";
 
@@ -214,10 +215,10 @@ describe("workflow chat progress rendering", () => {
 		} as any), "running");
 	});
 
-	it("writes mission binding before async workflow child launch", () => {
+	for (const nestedRootRunId of [undefined, "binding-root"]) it(`writes mission binding at the actual async launch location (${nestedRootRunId ?? "top-level"})`, () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-workflow-child-binding-"));
 		const asyncId = `workflow-child-${process.pid}-${Date.now()}`;
-		const asyncDir = path.join(DIRS.async, asyncId);
+		const asyncDir = path.join(nestedRootRunId ? nestedRunScope(nestedRootRunId).asyncDirRoot : DIRS.async, asyncId);
 		try {
 			const location = {
 				projectRoot: root,
@@ -231,10 +232,12 @@ describe("workflow chat progress rendering", () => {
 				{ missionId: mission.id, location, autoCreated: false },
 				false,
 				asyncId,
+				nestedRootRunId,
 			);
 
 			assert.equal(params.workflowChildAsyncId, asyncId);
 			assert.equal(readMissionBinding(asyncDir)?.missionId, mission.id);
+			if (nestedRootRunId) assert.equal(fs.existsSync(path.join(DIRS.async, asyncId)), false);
 		} finally {
 			fs.rmSync(asyncDir, { recursive: true, force: true });
 			fs.rmSync(root, { recursive: true, force: true });

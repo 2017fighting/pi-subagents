@@ -28,7 +28,10 @@ export interface WorkflowPublicChild {
 	output: string;
 	outputState: "present" | "absent";
 	structuredOutput?: unknown;
-	success: boolean;
+	/** Omitted for running launch receipts. */
+	success?: boolean;
+	state?: "running";
+	asyncDir?: string;
 	terminalOutcome?: WorkflowTerminalOutcome;
 	outputReference?: string;
 	outputPathMapping?: { requestedPath: string; savedPath: string };

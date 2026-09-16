@@ -3030,6 +3030,26 @@ describe("scripted workflow runtime", () => {
 		assert.equal(result.children.filter((child) => !child.ok).length, 0);
 	});
 
+	it("returns running launch receipts without failure or child-settlement notifications", async () => {
+		const notifications: unknown[] = [];
+		let launches = 0;
+		const result = await runWorkflowScript({
+			workflowRunId: "dispatch-only",
+			script: `const first = await runs.run("a", { agent: "worker", async: true });
+				const reused = await runs.run("a", { agent: "worker", async: true });
+				const batch = await runs.all([{ key: "b", agent: "worker", async: true }]);
+				return [first, reused, ...batch];`,
+			onChildSettled: (notice) => notifications.push(notice),
+			async launch(key) { launches++; return { key, ok: false, state: "running", runId: `${key}-run`, output: "", asyncDir: `/tmp/${key}`, artifactPaths: [`/tmp/${key}`] }; },
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+		assert.equal(launches, 2);
+		assert.deepEqual(notifications, []);
+		assert.equal(result.children.length, 2);
+		assert.ok(result.children.every((child) => child.state === "running" && child.error === undefined && !child.ok));
+		assert.equal(result.trace.some((entry) => entry.state === "completed" || entry.state === "failed"), false);
+	});
+
 	it("notifies onChildSettled for each child as it completes while workflow runs", async () => {
 		const settledNotifications: Array<{ childKey: string; outcome: string; workflowRunning: boolean }> = [];
 		let releaseB: () => void;
