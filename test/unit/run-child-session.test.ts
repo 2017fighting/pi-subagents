@@ -1,0 +1,47 @@
+import assert from "node:assert/strict";
+import { it } from "node:test";
+import { runChildSession } from "../../src/runs/background/run-child-session.ts";
+import type { ChildSession, ChildSessionFactory } from "../../src/runs/shared/child-session.ts";
+import type { InProcessChildLaunch } from "../../src/runs/shared/child-launch.ts";
+
+const launch = { session: {
+	cwd: process.cwd(), storage: { kind: "memory" }, extensionPaths: [], ambientExtensions: false,
+	hooks: [], noSkills: true, noContextFiles: true,
+	runtime: { fanoutChild: false, fast: false, depth: 1, waitTool: { enabled: false } },
+} } as InProcessChildLaunch;
+
+// Without the abort backstop this run never settles, so bound the test instead of hanging the suite.
+it("settles a timed-out run whose session creation never returns, and disposes a late session", { timeout: 10_000 }, async () => {
+	let releaseCreate!: (session: ChildSession) => void;
+	const createBlocked = new Promise<ChildSession>((resolve) => { releaseCreate = resolve; });
+	let timeout: (() => void) | undefined;
+	let prompted = false;
+	let disposed = false;
+	const session: ChildSession = {
+		subscribe() { return () => {}; },
+		async prompt() { prompted = true; },
+		async steer() {}, async followUp() {}, async abort() {},
+		async dispose() { disposed = true; },
+		messages: [], sessionId: "late-session", modelId: "mock/model",
+	};
+	const factory: ChildSessionFactory = { create: () => createBlocked, async dispose() {} };
+	const run = runChildSession({
+		factory,
+		launch,
+		prompt: "never starts",
+		timeoutMessage: "Subagent timed out after 1ms.",
+		appendChildEvent() {}, writeOutputLine() {},
+		registerTimeout(handler) { timeout = handler; },
+	});
+	assert.ok(timeout, "runChildSession must register its timeout handler before the session exists");
+	timeout();
+	const result = await run;
+	assert.equal(result.timedOut, true);
+	assert.equal(result.exitCode, 1);
+	assert.equal(result.error, "Subagent timed out after 1ms.");
+
+	releaseCreate(session);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(disposed, true);
+	assert.equal(prompted, false);
+});
