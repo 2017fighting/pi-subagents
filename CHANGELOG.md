@@ -2,16 +2,22 @@
 
 ## [Unreleased]
 
+## [0.69.0] - 2026-09-18
+
+### Highlights
+- Gates can now return a JSON verdict. Point `gate` at a script that prints JSON, and its output becomes the child's structured output, so workflows can branch on a post-run check without the parent reading the child's report.
+- Ghostty detection no longer misfires inside terminals like cmux that embed Ghostty, so you stop seeing AppleScript `-1728`/`-2741` errors or the wrong window being targeted.
+- Hosts without `npm` start up quietly instead of printing `npm: command not found`.
+
 ### Added
 
-- Typed gates: `gate` accepts `{ command, output: "json", schema?, timeoutMs? }`. A passing command's JSON stdout becomes the child's `structuredOutput` (schema-validated when `schema` is given), so a post-run classifier can supply a verdict that `runs.lanes` and workflow scripts branch on without the parent reading the child's output. Invalid, empty, or truncated stdout fails the gate instead of dropping the verdict; typed gates are never memoized; a typed gate cannot be combined with an `outputSchema` from the launch or the agent's frontmatter. Documented command-runner agents as typed workflow steps, with a runnable `examples/typed-gate`.
+- Typed gates: `gate` accepts `{ command, output: "json", schema?, timeoutMs? }` alongside the plain string form. When the command passes, its JSON stdout becomes the child's `structuredOutput` (validated against `schema` when given). Empty, truncated, or invalid output fails the gate rather than silently dropping the verdict. Typed gates always run (they are never cached), and a run cannot combine one with an `outputSchema`. See `docs/` for using command-runner agents as typed workflow steps and `examples/typed-gate` for a runnable example.
 
 ### Fixed
 
-- `docs/tool-reference.md` no longer claims a default `maxOutput` of 200 KB / 5,000 lines; the cap applies only when `maxOutput` is set.
-
-- The Ghostty inspector no longer takes over when `TERM_PROGRAM=ghostty` comes from a terminal that embeds the Ghostty kernel (such as cmux) instead of the standalone Ghostty app. Availability now requires the macOS host bundle id (`__CFBundleIdentifier`) to identify Ghostty itself; absent or different host identity declines to the `inspector.command` hint instead of targeting an unrelated Ghostty window or emitting `-1728`/`-2741` AppleScript errors. Thanks to [@wangpi26](https://github.com/wangpi26) for #2281.
-- Keep optional global package-root discovery silent when the package manager is unavailable, so a host without `npm` no longer prints `/bin/sh: npm: command not found` during startup. Thanks to [@PhrZer](https://github.com/PhrZer) for #2287.
+- The Ghostty inspector only activates when the macOS host bundle id identifies the standalone Ghostty app. Terminals that embed Ghostty (such as cmux) set `TERM_PROGRAM=ghostty` too, which previously targeted an unrelated Ghostty window or emitted `-1728`/`-2741` AppleScript errors; those hosts now fall back to the `inspector.command` hint. Thanks to [@wangpi26](https://github.com/wangpi26) for #2281.
+- Hosts without `npm` no longer print `/bin/sh: npm: command not found` during startup; global package-root discovery is optional and now stays silent when the package manager is missing. Thanks to [@PhrZer](https://github.com/PhrZer) for #2287.
+- Fixed `docs/tool-reference.md`, which claimed a default `maxOutput` cap of 200 KB / 5,000 lines. The cap applies only when `maxOutput` is set.
 
 ## [0.68.0] - 2026-09-15
 
