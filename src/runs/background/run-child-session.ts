@@ -243,8 +243,10 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 		};
 
 		const abortChild = (): void => {
-			if (!session || settled || promptSettled) return;
-			void session.abort().catch(() => {
+			if (settled || promptSettled) return;
+			// A hung session creation has no session to abort yet; the settle timer below is the only
+			// thing that ends the run, and a session created afterwards is disposed by the launch block.
+			void session?.abort().catch(() => {
 				// The run settles through its prompt promise; abort failures are not separately actionable.
 			});
 			if (!abortSettleTimer) {
@@ -641,7 +643,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 				const createInput = createReportedChildSessionInput(input.launch, input.transcriptWriter);
 				const created = await input.factory.create(createInput);
 				if (settled) {
-					void created.dispose();
+					await created.dispose().catch(() => undefined);
 					return;
 				}
 				session = created;

@@ -39,6 +39,10 @@
 
 - Report actionable, rooted field paths for the selected branch of failed structured-output `if`/`then`/`else` schemas while preserving root `$defs`. Thanks to [@peedrr](https://github.com/peedrr) for #2317.
 
+### Fixed
+
+- Settle interrupted, stopped, or timed-out background runs even when child session creation hangs, and contain disposal failures if creation completes after settlement. Thanks to [@onorua](https://github.com/onorua) for #2320.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights
