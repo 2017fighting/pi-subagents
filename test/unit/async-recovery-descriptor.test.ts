@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import * as fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { readAsyncRecoveryDescriptor } from "../../src/runs/background/async-resume.ts";
+import { executeAsyncSingle } from "../../src/runs/background/async-execution.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
+import { DIRS } from "../../src/shared/types.ts";
+import { makeAgent } from "../support/helpers.ts";
 
 const budgetDirectories: string[] = [];
 
@@ -19,6 +24,30 @@ afterEach(() => {
 });
 
 describe("async recovery descriptor", () => {
+	it("snapshots an explicit empty descendant allowlist before detached spawn", (t) => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-recovery-allowed-agents-"));
+		const runId = `recovery-allowed-agents-${Date.now().toString(36)}`;
+		const asyncDir = path.join(DIRS.async, runId);
+		const spawn = t.mock.method(childProcess, "spawn", () => { throw new Error("captured detached spawn"); });
+		syncBuiltinESMExports();
+		try {
+			const result = executeAsyncSingle(runId, {
+				agent: "worker", task: "Coordinate", agentConfig: makeAgent("worker", { allowedAgents: [] }),
+				ctx: { pi: { events: { emit() {} } }, cwd: root, currentSessionId: "recovery-allowed-agents" },
+				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+				shareEnabled: false, sessionRoot: path.join(root, "sessions"), maxSubagentDepth: 1, acceptance: false,
+			});
+			assert.equal(result.isError, true);
+			assert.equal(spawn.mock.callCount(), 1);
+			assert.deepEqual(readAsyncRecoveryDescriptor(asyncDir)?.allowedAgents, []);
+		} finally {
+			t.mock.restoreAll();
+			syncBuiltinESMExports();
+			fs.rmSync(root, { recursive: true, force: true });
+			fs.rmSync(asyncDir, { recursive: true, force: true });
+		}
+	});
+
 	it("accepts launchContractDigest written by async execution", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-recovery-digest-"));
 		try {

@@ -5,6 +5,7 @@
 ### Added
 
 - Add `subagents.defaultSubagentOnlyExtensions` for shared child-only extension paths without disabling ambient extension discovery. Thanks to [@Shujakuinkuraudo](https://github.com/Shujakuinkuraudo) for #2284.
+- Let agent frontmatter and `subagents.agentOverrides.<name>.allowedAgents` narrow which canonical agents a child may launch, without granting nested delegation or widening inherited capability ceilings. Thanks to [@shkrabov](https://github.com/shkrabov) for #2312.
 
 ## [0.69.0] - 2026-09-18
 
