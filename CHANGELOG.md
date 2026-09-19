@@ -6,6 +6,10 @@
 
 - Add `subagents.defaultSubagentOnlyExtensions` for shared child-only extension paths without disabling ambient extension discovery. Thanks to [@Shujakuinkuraudo](https://github.com/Shujakuinkuraudo) for #2284.
 
+### Fixed
+
+- Treat Windows `UNKNOWN` errors while scanning supervisor channel directories as transient when those temporary directories disappear, so polling keeps running and can recover. Thanks to [@asher-aqi](https://github.com/asher-aqi) for #2303.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights
