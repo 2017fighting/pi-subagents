@@ -265,6 +265,96 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.details.results[0]?.timedOut, undefined);
 	});
 
+	it("preserves a blocked foreground delegated tool attempt without an execution-start event", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const blockedMessage = "Tool budget hard limit reached after 1 tool call (hard 0). The 'bash' tool is blocked so you can finalize from the context you already have.";
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [
+					// A still-pending earlier call must not be attributed as the blocked tool.
+					{ type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "notes.md" } },
+					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: true, content: [{ type: "text", text: blockedMessage }] } },
+					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "read-1", toolName: "read", isError: false, content: [{ type: "text", text: "ordinary notes" }] } },
+				] },
+				{ jsonl: [events.assistantMessage("I could not read the required canary because bash was blocked.")] },
+			],
+		});
+		const request: SubagentDelegationRequest = {
+			requestId: "delegated-tool-budget-blocked",
+			ownerRunId: "owner-1",
+			nodeId: "node-1",
+			agent: "bash-worker",
+			task: "Use bash to read the required canary.",
+			context: "fresh",
+			cwd: tempDir,
+			model: "mock/model",
+			toolBudget: { hard: 0, block: "*" },
+			result: { kind: "text" },
+		};
+		const result = await makeExecutor([makeAgent("bash-worker")]).executeDelegated(
+			request.requestId,
+			toSubagentDelegationExecutionParams(request),
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const child = result.details?.results?.[0];
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "delegated execution failed");
+		assert.equal(child?.toolBudgetBlocked, true);
+		assert.equal(child?.toolBudget?.blockedTool, "bash");
+		assert.equal(child?.finalOutput, "I could not read the required canary because bash was blocked.");
+
+		mockPi.onCall({ output: "No tool needed." });
+		const normal = await makeExecutor([makeAgent("bash-worker")]).executeDelegated(
+			"delegated-no-tool",
+			toSubagentDelegationExecutionParams({ ...request, requestId: "delegated-no-tool", task: "Answer without tools." }),
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(normal.details?.results?.[0]?.toolBudgetBlocked, undefined);
+		assert.equal(normal.details?.results?.[0]?.finalOutput, "No tool needed.");
+	});
+
+	it("does not classify ordinary tool output that merely quotes the block message", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const quoted = `src/log.md:12:Tool budget hard limit reached after 1 tool call (hard 0). The 'bash' tool is blocked so you can finalize from the context you already have.`;
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [
+					{ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "grep -rn 'Tool budget hard limit reached' src/" } },
+					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: false, content: [{ type: "text", text: quoted }] } },
+					{ type: "tool_execution_end", toolName: "bash" },
+				] },
+				{ jsonl: [events.assistantMessage("The phrase appears in a log; nothing was blocked.")] },
+			],
+		});
+		const request: SubagentDelegationRequest = {
+			requestId: "delegated-tool-budget-quoted",
+			ownerRunId: "owner-1",
+			nodeId: "node-1",
+			agent: "bash-worker",
+			task: "Search the repository for budget log lines.",
+			context: "fresh",
+			cwd: tempDir,
+			model: "mock/model",
+			toolBudget: { hard: 5, block: "*" },
+			result: { kind: "text" },
+		};
+		const result = await makeExecutor([makeAgent("bash-worker")]).executeDelegated(
+			request.requestId,
+			toSubagentDelegationExecutionParams(request),
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const child = result.details?.results?.[0];
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "delegated execution failed");
+		assert.equal(child?.toolBudgetBlocked, undefined);
+		assert.equal(child?.toolBudget?.outcome, "within-budget");
+		assert.equal(child?.finalOutput, "The phrase appears in a log; nothing was blocked.");
+	});
+
 	it("keeps public structured single-child calls foreground when async is disabled by default", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "Structured child used the foreground default" });
 		const executor = makeExecutor([makeAgent("echo")], {}, false);
@@ -3828,6 +3918,116 @@ Answer only from the supplied synthetic text.
 		assert.equal(fs.readFileSync(markerPath, "utf-8"), "verified");
 		assert.equal(result.details.results[0]?.acceptance?.status, "verified");
 		assert.equal(result.details.results[0]?.acceptance?.verifyRuns[0]?.id, "gate");
+	});
+
+	it("bridges a typed gate's json stdout into the child's structuredOutput", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "Review complete. See report." });
+		const executor = makeExecutor([makeAgent("echo")]);
+		const gate = {
+			command: `${process.execPath} -e "process.stdout.write(JSON.stringify({ verdict: 'blocked', action: 'writer-fix' }))"`,
+			output: "json",
+			schema: { type: "object", properties: { verdict: { type: "string", enum: ["ok", "blocked"] } }, required: ["verdict"] },
+		};
+
+		const result = await executor.execute(
+			"typed-gate",
+			{ async: false, agent: "echo", task: "Review the report without edits", gate },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "typed gate failed");
+		const child = result.details.results[0];
+		assert.equal(child?.acceptance?.status, "verified");
+		assert.equal(child?.acceptance?.verifyRuns[0]?.status, "passed");
+		assert.deepEqual(child?.structuredOutput, { verdict: "blocked", action: "writer-fix" });
+	});
+
+	it("fails the run when a typed gate prints something other than schema-valid json", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "Review complete." });
+		const executor = makeExecutor([makeAgent("echo")]);
+		const result = await executor.execute(
+			"typed-gate-invalid",
+			{ async: false, agent: "echo", task: "Review the report without edits", gate: { command: `${process.execPath} -e "process.stdout.write('WRITER-FIX report=r.md')"`, output: "json" } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /verification 'gate' failed: output: "json" stdout is not valid JSON/);
+		assert.equal(result.details.results[0]?.structuredOutput, undefined);
+	});
+
+	it("rejects a typed gate combined with outputSchema before launch, in both spellings", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")]);
+		const shorthand = await executor.execute(
+			"typed-gate-conflict",
+			{ async: false, agent: "echo", task: "Review", gate: { command: "true", output: "json" }, outputSchema: { type: "object" } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(shorthand.isError, true);
+		assert.match(shorthand.content[0]?.text ?? "", /gate\.output: .*cannot be combined with outputSchema/);
+
+		const explicit = await executor.execute(
+			"typed-verify-conflict",
+			{ async: false, agent: "echo", task: "Review", acceptance: { level: "verified", verify: [{ id: "v", command: "true", output: "json" }] }, outputSchema: { type: "object" } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(explicit.isError, true);
+		assert.match(explicit.content[0]?.text ?? "", /acceptance\.verify: .*cannot be combined with outputSchema/);
+
+		const declared = makeExecutor([makeAgent("typed", { outputSchema: { type: "object" } })]);
+		const frontmatter = await declared.execute(
+			"typed-gate-agent-schema",
+			{ async: false, agent: "typed", task: "Review", gate: { command: "true", output: "json" } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(frontmatter.isError, true);
+		assert.match(frontmatter.content[0]?.text ?? "", /gate\.output: .*cannot be combined with agent 'typed' outputSchema/);
+		assert.equal(mockPi.callCount(), 0);
+	});
+
+	it("preserves an explicitly bound staged index through a foreground launch", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const cwd = fs.mkdtempSync(path.join(tempDir, "preserved-index-"));
+		execFileSync("git", ["init", "-q"], { cwd });
+		fs.writeFileSync(path.join(cwd, "owned.txt"), "parent staged\n", "utf-8");
+		execFileSync("git", ["add", "owned.txt"], { cwd });
+		const before = execFileSync("git", ["write-tree"], { cwd, encoding: "utf-8" }).trim();
+		mockPi.onCall({ output: [
+			"review complete",
+			"```acceptance-report",
+			JSON.stringify({
+				criteriaSatisfied: [{ id: "criterion-1", status: "satisfied", evidence: "implemented" }],
+				changedFiles: [],
+				testsAddedOrUpdated: [],
+				commandsRun: [{ command: "npm test", result: "passed", summary: "passed" }],
+				validationOutput: ["tests passed"],
+				residualRisks: [],
+				noStagedFiles: false,
+			}),
+			"```",
+		].join("\n") });
+		const executor = makeExecutor([makeAgent("worker")]);
+
+		const result = await executor.execute(
+			"preserved-index",
+			{ async: false, agent: "worker", task: "Review the fix without edits", cwd, acceptance: { level: "checked", preserveStagedIndex: true } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(cwd),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "preserved index run failed");
+		assert.equal(result.details.results[0]?.acceptance?.status, "checked");
+		assert.equal(execFileSync("git", ["write-tree"], { cwd, encoding: "utf-8" }).trim(), before);
 	});
 
 	it("lets runs.all siblings settle when one verified gate fails", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

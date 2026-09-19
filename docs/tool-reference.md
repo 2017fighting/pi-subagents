@@ -122,13 +122,13 @@ The complete plain-JSON inventory is validated before the first launch (maximum 
 | `usageBudget` | object | none | Optional root-only reported-usage budget `{ tokens?: { soft?, hard }, costUsd?: { soft?, hard } }`. Soft limits are status-only. Hard limits prevent later child launches after reported usage is reconciled; already-running children are not stopped and no reservations are made. |
 | `cwd` | string | runtime cwd | Override working directory. With `machine`, the directory on that machine. |
 | `machine` | string | - | Herdr saved machine (label or profile id) for external-cli agents; see [agents.md](agents.md#running-external-cli-agents-on-a-herdr-saved-machine). |
-| `maxOutput` | object | 200KB, 5000 lines | Final output truncation limits. |
+| `maxOutput` | object | none | Final output truncation limits `{ bytes?, lines? }`. Only applied when set; there is no default cap on the inline path, so use `outputMode: "file-only"` for large outputs. |
 | `artifacts` | boolean | true | Write debug artifacts. |
 | `includeProgress` | boolean | false | Include full progress in result. |
 | `share` | boolean | false | Upload session export to GitHub Gist. |
 | `sessionDir` | string | derived | Override session log directory. |
 | `acceptance` | string/object/false | inferred | Configure evidence gates. See [Acceptance gates](#acceptance-gates). |
-| `gate` | string | - | One host-run verification command, shorthand for `acceptance: { level: "verified", verify: [{ id: "gate", command }] }`. Also valid on individual `runs.run`/`runs.all` items. Rejects `acceptance` except `false` (treated as omitted), and rejects retained `resume`. |
+| `gate` | string \| object | - | One host-run verification command, shorthand for `acceptance: { level: "verified", verify: [{ id: "gate", command }] }`. The object form `{ command, output?: "json", schema?, timeoutMs? }` adds a [typed gate](#typed-gates): with `output: "json"`, a passing command's stdout becomes the child's `structuredOutput`. Also valid on individual `runs.run`/`runs.all` items. Rejects `acceptance` except `false` (treated as omitted), rejects retained `resume`, and `output: "json"` rejects `outputSchema`. |
 
 ### Budget guidance for writers
 
@@ -381,6 +381,8 @@ The `/subagents-steer <run-id> [--child <child-id>] <message>` slash command is 
 
 Every run resolves an effective acceptance policy. Callers may omit `acceptance` for the inferred default, or set it on single runs, top-level parallel task items, chain steps, static parallel tasks, and dynamic fanout templates.
 
+Checked writers reject staged files by default. When a parent intentionally starts a single writer with reviewed staged content, opt in with `acceptance: { level: "checked", preserveStagedIndex: true }`. The host captures the repository-wide index tree immediately before each launch (including each retained resume) and accepts only if `git write-tree` produces the same tree at completion. Working-tree-only fixes are allowed; child-created staging is rejected. Capture or terminal Git failures, including an unavailable or unmerged index, fail closed. This option does not stage or restore files and should not be used for concurrent writers sharing one worktree.
+
 Prefer an inline JSON object. JSON-encoded object strings are tolerated only during input normalization; invalid strings fail closed. `true` is invalid. Supported evidence kinds are `changed-files`, `tests-added`, `commands-run`, `validation-output`, `residual-risks`, `no-staged-files`, `diff-summary`, `review-findings`, and `manual-notes`. For example: `{level:"checked",evidence:["commands-run","changed-files"],review:{required:true}}`. Evidence levels end at `verified`; independent review is a separate gate, not a stronger evidence level.
 
 ```ts
@@ -405,6 +407,25 @@ When one host-run command is the entire verification contract, use the `gate` sh
 ```
 
 `gate` normalizes to verified acceptance with that single command, so the runtime executes it on the host and records the result as evidence. Verification results are memoized per tracked workspace state and effective environment, so an unchanged tree does not rerun the same command. Use explicit `acceptance.verify` when you need multiple commands, timeouts, or custom criteria. `gate` rejects `acceptance` except `false` (treated as omitted), and rejects retained `resume` items. With `worktree: true`, the gate runs inside the child's managed worktree.
+
+### Typed gates
+
+A gate given as `{ command, output: "json" }` runs like a string gate, and then parses the command's stdout:
+
+```js
+{ workflowScript: `return runs.run("review", {
+  agent: "reviewer", task: "Review the change", output: "reports/review.md", outputMode: "file-only",
+  gate: { command: "classify --report reports/review.md", output: "json",
+          schema: { type: "object", properties: { verdict: { enum: ["ok", "blocked"] } }, required: ["verdict"] } }
+})` }
+```
+
+- The command runs after the child's output file is saved, in the child's cwd or managed worktree, so it can read what the child wrote.
+- A passing command must print one JSON document on stdout (at most 12,000 characters). The parsed value becomes `result.structuredOutput`, is recorded on the verify run as `structuredOutput`, and is projected into `status.json`. When `schema` is given, the value must validate against it.
+- Empty, truncated, non-JSON, or schema-invalid stdout marks the gate `failed` with a `structuredOutputError`; explicit acceptance then fails the run, exactly as a non-zero exit would. The verdict is never silently dropped.
+- Typed gates are never memoized: their input (a report, a log) can change without the tracked tree changing.
+- `output: "json"` cannot be combined with an `outputSchema` from any source: the launch `outputSchema` param or the agent's frontmatter, paired with `gate`, an explicit `acceptance.verify` entry, or the agent's `defaultAcceptance`. Preflight rejects the launch and names both sources. A child has exactly one structured-output source.
+- `runs.lanes` treats a bridged `structuredOutput.verdict === "blocked"` like any other blocked stage. Scripts read the value as `result.structuredOutput`.
 
 ### Levels and inference
 

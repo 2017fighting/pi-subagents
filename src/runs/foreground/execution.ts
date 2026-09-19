@@ -88,10 +88,10 @@ import {
 	shouldEscalateMutatingFailures,
 	summarizeRecentMutatingFailures,
 } from "../shared/long-running-guard.ts";
-import { acceptanceFailureMessage, buildSkippedAcceptanceLedger, evaluateAcceptance, formatAcceptancePrompt, resolveEffectiveAcceptance, stripAcceptanceReport, validateAcceptanceInput } from "../shared/acceptance.ts";
+import { acceptanceFailureMessage, buildSkippedAcceptanceLedger, captureStagedIndexBaseline, evaluateAcceptance, formatAcceptancePrompt, resolveEffectiveAcceptance, stripAcceptanceReport, validateAcceptanceInput, typedVerifyOutput } from "../shared/acceptance.ts";
 import { PROMPT_REDACTED } from "../../shared/utils.ts";
 import { attachContractProjections, isAgentContract } from "../shared/agent-contract.ts";
-import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
+import { initialToolBudgetState, isToolBudgetBlockedMessage, toolBudgetState } from "../shared/tool-budget.ts";
 import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
 import { resolveLaunchBinding } from "../../shared/launch-contract.ts";
 import { consumeWorkflowChildPermit } from "../../shared/workflow-child-permit.ts";
@@ -426,7 +426,6 @@ async function runSingleAttempt(
 		thinkingCeiling: options.thinkingCeiling,
 		maxSubagentDepth: options.maxSubagentDepth,
 		runtimeSnapshotHost: options.runtimeSnapshotHost,
-		hostAvailableBuiltins: options.hostAvailableBuiltins,
 		inherited: options.childRuntime,
 		host: "parent",
 	});
@@ -1151,9 +1150,18 @@ async function runSingleAttempt(
 				}
 				result.messages!.push(evt.message);
 				const resultText = extractTextFromContent(evt.message.content);
-				if (options.toolBudget && pendingToolResult && resultText.includes("Tool budget hard limit reached")) {
+				// The result event's own tool name is authoritative; the single pending slot can
+				// describe a different, overlapping call and serves only as a fallback.
+				const blockedTool = (typeof toolResultCompletion.toolName === "string" && toolResultCompletion.toolName.length > 0
+					? toolResultCompletion.toolName
+					: undefined) ?? pendingToolResult?.tool;
+				if (options.toolBudget && isToolBudgetBlockedMessage(options.toolBudget, resultText, blockedTool)) {
 					result.toolBudgetBlocked = true;
-					result.toolBudget = toolBudgetState(options.toolBudget, progress.toolCount, pendingToolResult.tool);
+					result.toolBudget = toolBudgetState(
+						options.toolBudget,
+						Math.max(progress.toolCount, options.toolBudget.hard + 1),
+						blockedTool,
+					);
 				}
 				appendRecentOutput(progress, resultText.split("\n").slice(-10));
 				const toolSnapshot = pendingToolResult;
@@ -1892,6 +1900,22 @@ async function runSyncCompletionInner(
 	const verifyModel = Boolean(candidate) && !options.modelOverrideFromParent;
 	let lastResult: SingleResult | undefined;
 	let recoveryPrompt = task;
+	let stagedIndexBaseline: string | undefined;
+	if (effectiveAcceptance.preserveStagedIndex) {
+		try {
+			stagedIndexBaseline = captureStagedIndexBaseline(options.cwd ?? runtimeCwd);
+		} catch (error) {
+			return redactResultPrompt(withRunContext({
+				index: options.index ?? 0,
+				agent: agentName,
+				task,
+				exitCode: 1,
+				messages: [],
+				usage: emptyUsage(),
+				error: error instanceof Error ? error.message : String(error),
+			}, options.context));
+		}
+	}
 	for (let attemptIndex = 0; attemptIndex < 2; attemptIndex++) {
 		const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
 		const attemptResult = await runSingleAttempt(runtimeCwd, agent, recoveryPrompt, candidate, attemptOptions, {
@@ -2022,6 +2046,7 @@ async function runSyncCompletionInner(
 					? { content: childWrittenOutput, path: options.outputPath, authoritative: options.outputMode === "file-only", durable: result.savedOutputPath !== undefined }
 					: undefined,
 				cwd: options.cwd ?? runtimeCwd,
+				stagedIndexBaseline,
 				reportOptional: isAgentContract(options.agentContract),
 				artifactsDir: options.artifactsDir,
 				runId: options.runId,
@@ -2034,6 +2059,12 @@ async function runSyncCompletionInner(
 	}
 	const acceptanceFailure = acceptanceFailureMessage(result.acceptance);
 	stripAcceptanceReportsFromMessages(result.messages);
+	// A passing typed gate supplies the structured output for runs that have no
+	// outputSchema of their own; preflight rejects the combination.
+	const typedGate = typedVerifyOutput(result.acceptance);
+	if (typedGate && result.structuredOutput === undefined && !acceptanceFailure && result.exitCode === 0) {
+		result.structuredOutput = typedGate.value;
+	}
 	if (acceptanceFailure && result.acceptance.explicit && result.exitCode === 0 && !result.interrupted && !result.timedOut && !isAgentContract(options.agentContract)) {
 		result.exitCode = 1;
 		if (result.savedOutputPath) {

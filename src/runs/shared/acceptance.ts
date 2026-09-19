@@ -18,6 +18,7 @@ import type {
 	AcceptanceReviewResult,
 	AcceptanceVerifyCommand,
 	AcceptanceVerifyResult,
+	JsonSchemaObject,
 	ResolvedAcceptanceConfig,
 	ResolvedAcceptanceGate,
 	SingleResult,
@@ -26,6 +27,7 @@ import type {
 } from "../../shared/types.ts";
 import { unresolvedChildWatchdogBlockers } from "../../watchdog/child-status.ts";
 import { isAgentContract } from "./agent-contract.ts";
+import { validateStructuredOutputValue } from "./structured-output.ts";
 import { classifyTaskMutationIntent, stripSeverityCompounds, taskMayMutate } from "./task-intent.ts";
 
 const LEVEL_RANK: Record<Exclude<AcceptanceLevel, "auto">, number> = {
@@ -50,9 +52,9 @@ const VALID_EVIDENCE_KINDS: AcceptanceEvidenceKind[] = [
 const VALID_EVIDENCE = new Set<AcceptanceEvidenceKind>(VALID_EVIDENCE_KINDS);
 const ACCEPTANCE_EVIDENCE_HELP = `Supported evidence kinds: ${VALID_EVIDENCE_KINDS.join(", ")}. Example: { level: "checked", evidence: ["commands-run", "changed-files"] }.`;
 const ACCEPTANCE_OBJECT_EXAMPLE = "Example: { level: \"checked\", evidence: [\"commands-run\", \"changed-files\"] }.";
-const ACCEPTANCE_CONFIG_KEYS = new Set(["level", "report", "criteria", "evidence", "verify", "review", "stopRules", "reason"]);
+const ACCEPTANCE_CONFIG_KEYS = new Set(["level", "report", "preserveStagedIndex", "criteria", "evidence", "verify", "review", "stopRules", "reason"]);
 const ACCEPTANCE_GATE_KEYS = new Set(["id", "must", "evidence", "severity"]);
-const ACCEPTANCE_VERIFY_KEYS = new Set(["id", "command", "timeoutMs", "cwd", "env", "allowFailure"]);
+const ACCEPTANCE_VERIFY_KEYS = new Set(["id", "command", "timeoutMs", "cwd", "env", "allowFailure", "output", "schema"]);
 const ACCEPTANCE_REVIEW_KEYS = new Set(["agent", "focus", "required"]);
 const EXPLICIT_REVIEWED_UNAVAILABLE = "is an achieved status, not a requestable acceptance level. For a read-only reviewer call, omit acceptance. To require independent review of a writer result, use acceptance.review.required and orchestrate the reviewer separately.";
 
@@ -200,15 +202,59 @@ type GateAcceptanceNormalizationResult =
 	| { ok: true; acceptance?: AcceptanceInput }
 	| { ok: false; error: string };
 
+const GATE_OBJECT_KEYS = new Set(["command", "output", "schema", "timeoutMs"]);
+export const GATE_INPUT_ERROR = "gate must be a non-empty command string or { command, output?: \"json\", schema?, timeoutMs? }.";
+
+export interface GateObjectInput {
+	command: string;
+	output?: "json";
+	schema?: JsonSchemaObject;
+	timeoutMs?: number;
+}
+
+/** Validates the two accepted gate shapes without normalizing them. Shared by preflight and the workflow sandbox mirror. */
+export function parseGateInput(gate: unknown): { ok: true; gate: GateObjectInput } | { ok: false; error: string } {
+	if (typeof gate === "string") {
+		return gate.trim() ? { ok: true, gate: { command: gate.trim() } } : { ok: false, error: GATE_INPUT_ERROR };
+	}
+	if (!gate || typeof gate !== "object" || Array.isArray(gate)) return { ok: false, error: GATE_INPUT_ERROR };
+	const value = gate as Record<string, unknown>;
+	for (const key of Object.keys(value)) {
+		if (!GATE_OBJECT_KEYS.has(key)) return { ok: false, error: `gate.${key} is not supported.` };
+	}
+	if (typeof value.command !== "string" || !value.command.trim()) return { ok: false, error: GATE_INPUT_ERROR };
+	if (value.output !== undefined && value.output !== "json") return { ok: false, error: "gate.output must be \"json\" when present." };
+	if (value.schema !== undefined) {
+		if (value.output !== "json") return { ok: false, error: "gate.schema requires gate.output: \"json\"." };
+		if (!value.schema || typeof value.schema !== "object" || Array.isArray(value.schema)) return { ok: false, error: "gate.schema must be a JSON Schema object." };
+	}
+	if (value.timeoutMs !== undefined && (!Number.isInteger(value.timeoutMs) || (value.timeoutMs as number) < 1)) return { ok: false, error: "gate.timeoutMs must be an integer >= 1." };
+	const parsed: GateObjectInput = { command: value.command.trim() };
+	if (value.output === "json") parsed.output = "json";
+	// SAFETY: schema was checked above to be a non-array object; timeoutMs to be an integer >= 1.
+	if (value.schema !== undefined) parsed.schema = value.schema as JsonSchemaObject;
+	if (value.timeoutMs !== undefined) parsed.timeoutMs = value.timeoutMs as number;
+	return { ok: true, gate: parsed };
+}
+
+/** True when an acceptance policy declares at least one `output: "json"` verify command, from either the gate shorthand or an explicit verify list. */
+export function acceptanceHasTypedVerify(acceptance: AcceptanceInput | undefined): boolean {
+	if (!acceptance || typeof acceptance !== "object") return false;
+	return Array.isArray(acceptance.verify) && acceptance.verify.some((command) => command && typeof command === "object" && command.output === "json");
+}
+
+export const TYPED_VERIFY_OUTPUT_SCHEMA_CONFLICT = "a typed verify command (output: \"json\") cannot be combined with outputSchema; the child would have two structured-output sources.";
+
 export function normalizeGateAcceptance(gate: unknown, acceptance: AcceptanceInput | undefined): GateAcceptanceNormalizationResult {
 	if (gate === undefined) {
 		if (acceptance === undefined) return { ok: true };
 		const normalized = normalizeAcceptanceValue(acceptance);
 		return normalized.error ? { ok: false, error: normalized.error } : { ok: true, acceptance: normalized.value as AcceptanceInput };
 	}
-	if (typeof gate !== "string" || !gate.trim()) return { ok: false, error: "gate must be a non-empty command string." };
+	const parsed = parseGateInput(gate);
+	if (!parsed.ok) return { ok: false, error: parsed.error };
 	if (acceptance !== undefined && acceptance !== false) return { ok: false, error: "gate cannot be combined with acceptance; use one gate command or acceptance.verify." + describeGateAcceptanceConflict(gate, acceptance) };
-	return { ok: true, acceptance: { level: "verified", verify: [{ id: "gate", command: gate.trim() }] } };
+	return { ok: true, acceptance: { level: "verified", verify: [{ id: "gate", ...parsed.gate }] } };
 }
 
 export function describeGateAcceptanceConflict(gate: unknown, acceptance: unknown): string {
@@ -266,6 +312,12 @@ export function validateAcceptanceInput(input: unknown, pathLabel = "acceptance"
 	}
 	if (value.report !== undefined && value.report !== "on" && value.report !== "off") {
 		errors.push(`${pathLabel}.report must be on or off.`);
+	}
+	if (value.preserveStagedIndex !== undefined && value.preserveStagedIndex !== true) {
+		errors.push(`${pathLabel}.preserveStagedIndex must be true when provided.`);
+	}
+	if (value.preserveStagedIndex === true && value.level !== "checked" && value.level !== "verified") {
+		errors.push(`${pathLabel}.preserveStagedIndex requires level checked or verified.`);
 	}
 	if (value.level === "none" && (typeof value.reason !== "string" || !value.reason.trim())) {
 		errors.push(`${pathLabel}.reason is required when level is none.`);
@@ -347,6 +399,11 @@ export function validateAcceptanceInput(input: unknown, pathLabel = "acceptance"
 			}
 			if (cmd.allowFailure !== undefined && typeof cmd.allowFailure !== "boolean") {
 				errors.push(`${pathLabel}.verify[${index}].allowFailure must be a boolean.`);
+			}
+			if (cmd.output !== undefined && cmd.output !== "json") errors.push(`${pathLabel}.verify[${index}].output must be "json" when present.`);
+			if (cmd.schema !== undefined) {
+				if (cmd.output !== "json") errors.push(`${pathLabel}.verify[${index}].schema requires output: "json".`);
+				if (!cmd.schema || typeof cmd.schema !== "object" || Array.isArray(cmd.schema)) errors.push(`${pathLabel}.verify[${index}].schema must be a JSON Schema object.`);
 			}
 		}
 	}
@@ -471,6 +528,7 @@ export function resolveEffectiveAcceptance(input: {
 			inferredReason: [],
 			criteria,
 			evidence,
+			preserveStagedIndex: explicit.preserveStagedIndex,
 			verify: explicit.verify ?? [],
 			review: explicit.review,
 			stopRules: explicit.stopRules ?? [],
@@ -496,6 +554,7 @@ export function resolveEffectiveAcceptance(input: {
 		inferredReason: inferred.reasons,
 		criteria: level === "none" ? [] : criteria,
 		evidence: level === "none" ? [] : evidence,
+		preserveStagedIndex: explicit.preserveStagedIndex,
 		verify: explicit.verify ?? [],
 		review,
 		stopRules: explicit.stopRules ?? [],
@@ -527,6 +586,9 @@ export function formatAcceptancePrompt(acceptance: ResolvedAcceptanceConfig, opt
 		"",
 		`Required evidence: ${acceptance.evidence.join(", ") || "none"}`,
 	];
+	if (acceptance.preserveStagedIndex) {
+		lines.push("The host will verify that the staged index is unchanged from launch; report noStagedFiles truthfully even when the preserved index is non-empty.");
+	}
 	if (acceptance.verify.length > 0) {
 		lines.push("", "Runtime verification commands configured by parent:");
 		for (const command of acceptance.verify) lines.push(`- ${command.id}: ${command.command}`);
@@ -1079,9 +1141,32 @@ function checkNoStagedFiles(cwd: string): AcceptanceRuntimeCheck {
 		: { id: "no-staged-files", status: "failed", message: `Staged files present: ${staged.join(", ")}` };
 }
 
+/** Capture the repository-wide index tree. Throws when Git cannot provide trustworthy evidence. */
+export function captureStagedIndexBaseline(cwd: string): string {
+	const result = spawnSync("git", ["write-tree"], { cwd, encoding: "utf-8", windowsHide: true });
+	const oid = result.stdout.trim();
+	if (result.status !== 0 || !oid) {
+		const detail = result.stderr.trim();
+		throw new Error(`Unable to capture staged index baseline${detail ? `: ${detail}` : "."}`);
+	}
+	return oid;
+}
+
+function checkStagedIndexUnchanged(cwd: string, baseline: string): AcceptanceRuntimeCheck {
+	try {
+		const terminal = captureStagedIndexBaseline(cwd);
+		return terminal === baseline
+			? { id: "staged-index-unchanged", status: "passed", message: "Staged index matches the launch baseline." }
+			: { id: "staged-index-unchanged", status: "failed", message: "Staged index changed after launch." };
+	} catch (error) {
+		return { id: "staged-index-unchanged", status: "failed", message: error instanceof Error ? error.message : String(error) };
+	}
+}
+
 function runStructuralChecks(acceptance: ResolvedAcceptanceConfig, report: AcceptanceReport, cwd: string): AcceptanceRuntimeCheck[] {
 	const checks: AcceptanceRuntimeCheck[] = [];
 	for (const kind of acceptance.evidence) {
+		if (kind === "no-staged-files" && acceptance.preserveStagedIndex) continue;
 		if (kind === "no-staged-files" && report.noStagedFiles === undefined) continue;
 		const status = reportEvidenceStatus(report, kind);
 		checks.push({
@@ -1094,7 +1179,7 @@ function runStructuralChecks(acceptance: ResolvedAcceptanceConfig, report: Accep
 					: `${kind} evidence missing from child report.`,
 		});
 	}
-	if (acceptance.evidence.includes("no-staged-files")) checks.push(checkNoStagedFiles(cwd));
+	if (!acceptance.preserveStagedIndex && acceptance.evidence.includes("no-staged-files")) checks.push(checkNoStagedFiles(cwd));
 	return checks;
 }
 
@@ -1202,6 +1287,43 @@ function isCachedVerifyResult(value: unknown): value is AcceptanceVerifyResult {
 		&& typeof result.durationMs === "number";
 }
 
+const TYPED_VERIFY_OUTPUT_MAX_BYTES = 12_000;
+
+/**
+ * A passing `output: "json"` command must print one JSON document on stdout.
+ * The parsed value becomes the run's structured output; anything else turns
+ * the passing run into a failed one so acceptance rejects rather than
+ * silently dropping the verdict. Stdout is already bounded by trimOutput, so a
+ * truncated document is detected by its marker instead of a parse guess.
+ */
+async function applyTypedVerifyOutput(command: AcceptanceVerifyCommand, run: AcceptanceVerifyResult): Promise<void> {
+	if (run.status !== "passed") return;
+	const stdout = run.stdout ?? "";
+	const fail = (message: string): void => {
+		run.status = "failed";
+		run.structuredOutputError = message;
+	};
+	if (!stdout.trim()) return fail("output: \"json\" command printed nothing on stdout.");
+	if (stdout.endsWith("...[truncated]")) return fail(`output: "json" stdout exceeded ${TYPED_VERIFY_OUTPUT_MAX_BYTES} characters and was truncated.`);
+	let value: unknown;
+	try {
+		value = JSON.parse(stdout);
+	} catch (error) {
+		return fail(`output: "json" stdout is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	if (command.schema) {
+		const validation = await validateStructuredOutputValue(command.schema, value);
+		if (validation.status === "invalid") return fail(`output: "json" stdout does not match gate.schema: ${validation.message}`);
+	}
+	run.structuredOutput = value;
+}
+
+/** The first typed verify result on a ledger, if any command produced one. */
+export function typedVerifyOutput(ledger: AcceptanceLedger | undefined): { value: unknown } | undefined {
+	const run = ledger?.verifyRuns?.find((entry) => entry.structuredOutput !== undefined);
+	return run ? { value: run.structuredOutput } : undefined;
+}
+
 async function runMemoizedVerifyCommand(command: AcceptanceVerifyCommand, defaultCwd: string, options: {
 	signal?: AbortSignal;
 	abortMessage?: string;
@@ -1215,7 +1337,9 @@ async function runMemoizedVerifyCommand(command: AcceptanceVerifyCommand, defaul
 	} catch {
 		workspaceState = undefined;
 	}
-	if (!workspaceState || !options.artifactsDir || !options.runId) {
+	// Typed gates read inputs (a report file, a log) that can change without
+	// the tracked tree changing, so their verdicts are never reused.
+	if (!workspaceState || !options.artifactsDir || !options.runId || command.output === "json") {
 		return runVerifyCommand(command, defaultCwd, options);
 	}
 	const envKeys = Object.keys(command.env ?? {}).sort();
@@ -1387,6 +1511,8 @@ export async function evaluateAcceptance(input: {
 	acceptance: ResolvedAcceptanceConfig;
 	output: string;
 	cwd: string;
+	/** Host-captured launch index tree; required by preserveStagedIndex. */
+	stagedIndexBaseline?: string;
 	/**
 	 * Content the child sent to its configured output file (from its own write
 	 * tool calls, not from disk, so a concurrent writer to the same path cannot
@@ -1482,30 +1608,36 @@ export async function evaluateAcceptance(input: {
 			ledger.runtimeChecks.push({ id: "verification-config", status: "failed", message: "verified acceptance requires runtime verify commands." });
 			ledger.status = "rejected";
 			ledger.evidenceStatus = "rejected";
-			return ledger;
-		}
-		ledger.verifyRuns = [];
-		for (const command of acceptance.verify) {
-			ledger.verifyRuns.push(await runMemoizedVerifyCommand(command, input.cwd, {
-				signal: input.signal,
-				abortMessage: input.abortMessage,
-				artifactsDir: input.artifactsDir,
-				runId: input.runId,
-			}));
-			if (input.signal?.aborted) break;
-		}
-		if (ledger.verifyRuns.some((run) => run.status === "failed" || run.status === "timed-out")) {
-			ledger.status = "rejected";
-			ledger.evidenceStatus = "rejected";
-			return ledger;
-		}
-		if (!ledger.runtimeChecks.some((check) => check.status === "failed")) {
-			ledger.status = "verified";
-			ledger.evidenceStatus = "verified";
+		} else {
+			ledger.verifyRuns = [];
+			for (const command of acceptance.verify) {
+				const run = await runMemoizedVerifyCommand(command, input.cwd, {
+					signal: input.signal,
+					abortMessage: input.abortMessage,
+					artifactsDir: input.artifactsDir,
+					runId: input.runId,
+				});
+				if (command.output === "json") await applyTypedVerifyOutput(command, run);
+				ledger.verifyRuns.push(run);
+				if (input.signal?.aborted) break;
+			}
+			if (ledger.verifyRuns.some((run) => run.status === "failed" || run.status === "timed-out")) {
+				ledger.status = "rejected";
+				ledger.evidenceStatus = "rejected";
+			} else if (!ledger.runtimeChecks.some((check) => check.status === "failed")) {
+				ledger.status = "verified";
+				ledger.evidenceStatus = "verified";
+			}
 		}
 	}
 
-	if (ledger.runtimeChecks.some((check) => check.status === "failed")) {
+	if (acceptance.preserveStagedIndex) {
+		ledger.runtimeChecks.push(input.stagedIndexBaseline
+			? checkStagedIndexUnchanged(input.cwd, input.stagedIndexBaseline)
+			: { id: "staged-index-unchanged", status: "failed", message: "Staged index launch baseline is unavailable." });
+	}
+
+	if (ledger.status === "rejected" || ledger.runtimeChecks.some((check) => check.status === "failed")) {
 		ledger.status = "rejected";
 		ledger.evidenceStatus = "rejected";
 		return ledger;
@@ -1559,6 +1691,7 @@ export function acceptanceFailureMessage(ledger: AcceptanceLedger): string | und
 	const failedCheck = ledger.runtimeChecks.find((check) => check.status === "failed");
 	if (failedCheck) return `Acceptance rejected: ${failedCheck.message}`;
 	const failedVerify = ledger.verifyRuns.find((run) => run.status === "failed" || run.status === "timed-out");
+	if (failedVerify?.structuredOutputError) return `Acceptance verification '${failedVerify.id}' failed: ${failedVerify.structuredOutputError}`;
 	if (failedVerify) return `Acceptance verification '${failedVerify.id}' ${failedVerify.status}.`;
 	if (ledger.reviewResult?.status === "blockers") return "Acceptance review found blockers.";
 	return "Acceptance rejected.";

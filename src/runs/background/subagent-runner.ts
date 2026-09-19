@@ -136,7 +136,7 @@ import { assertThinkingWithinCeiling } from "../../shared/thinking-ceiling.ts";
 import { resolveLaunchBinding } from "../../shared/launch-contract.ts";
 import { writeInitialProgressFile } from "../../shared/settings.ts";
 import { resolveSubagentIntercomTarget } from "../../intercom/intercom-bridge.ts";
-import { acceptanceFailureMessage, aggregateAcceptanceReport, buildSkippedAcceptanceLedger, evaluateAcceptance, formatAcceptancePrompt, resolveAcceptanceReportMode, resolveEffectiveAcceptance, stripAcceptanceReport } from "../shared/acceptance.ts";
+import { acceptanceFailureMessage, aggregateAcceptanceReport, buildSkippedAcceptanceLedger, captureStagedIndexBaseline, evaluateAcceptance, formatAcceptancePrompt, resolveAcceptanceReportMode, resolveEffectiveAcceptance, stripAcceptanceReport, typedVerifyOutput } from "../shared/acceptance.ts";
 import { attachContractProjections, isAgentContract } from "../shared/agent-contract.ts";
 import { waitForImportedAsyncRoot } from "./chain-root-attachment.ts";
 import { appendRunnerStepsToStatus, consumeChainAppendRequests, countPendingChainAppendRequests, statusStepDescription } from "./chain-append.ts";
@@ -223,7 +223,6 @@ export interface SubagentRunConfig {
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	/** Builtin tool names the host runtime provides; used to intersect agent-declared tools. */
-	hostAvailableBuiltins?: readonly string[];
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensions;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensions;
@@ -694,7 +693,6 @@ interface SingleStepContext {
 	nestedRoute?: NestedRouteInfo;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	runFanoutBudget?: RunFanoutBudgetDescriptor;
-	hostAvailableBuiltins?: readonly string[];
 	onAttemptStart?: (attempt: { model?: string; thinking?: string; contextLimit?: number }) => void;
 	onChildEvent?: (event: ChildEvent) => void;
 	onExternalProcess?: (process: ExternalProcessStatus) => void;
@@ -831,7 +829,6 @@ export async function runSingleStepInner(
 			inheritedCapabilityCeiling: ctx.inheritedChildRuntime?.capabilityCeiling,
 			requiredExtensions: step.requiredExtensions ?? ctx.inheritedChildRuntime?.requiredExtensions,
 			permissionRules: step.permissionRules,
-			hostAvailableBuiltins: ctx.hostAvailableBuiltins,
 		}));
 		const contractTools = resolvedTaskToolPlan.explicitToolAllowlist ? resolvedTaskToolPlan.effectiveToolAllowlist : undefined;
 		const contractError = validateImplementationToolContract({
@@ -1118,6 +1115,7 @@ export async function runSingleStepInner(
 	const aggregateUsage = emptyUsage();
 	let launched = false;
 	let recoveryTask = task;
+	let stagedIndexBaseline: string | undefined;
 	singleLaunch: for (let attemptIndex = 0; attemptIndex < 2; attemptIndex++) {
 		if (ctx.timeoutSignal?.aborted || ctx.stopSignal?.aborted || ctx.skipAcceptance?.()) break singleLaunch;
 		const expectedModelForVerification = candidate && !step.skipPrimaryModelVerification ? candidate : undefined;
@@ -1188,7 +1186,6 @@ export async function runSingleStepInner(
 				inheritedCapabilityCeiling: ctx.inheritedChildRuntime?.capabilityCeiling,
 				requiredExtensions: step.requiredExtensions ?? ctx.inheritedChildRuntime?.requiredExtensions,
 				permissionRules: step.permissionRules,
-				hostAvailableBuiltins: ctx.hostAvailableBuiltins,
 			}));
 			launchResolvedExtensions = projectLaunchResolvedChildExtensions(toolPlan);
 			actualLaunchContractDigest = resolveLaunchBinding({
@@ -1214,6 +1211,14 @@ export async function runSingleStepInner(
 		// Each attempt rewrites the step output log; synchronous appends keep a
 		// retried attempt from interleaving with the previous attempt's flush.
 		fs.writeFileSync(ctx.outputFile, "", "utf-8");
+		if (step.effectiveAcceptance?.preserveStagedIndex && stagedIndexBaseline === undefined) {
+			try {
+				stagedIndexBaseline = captureStagedIndexBaseline(step.cwd ?? ctx.cwd);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return { agent: step.agent, output: message, error: message, exitCode: 1, context: step.context };
+			}
+		}
 		const run = await runChildSession(omitUndefinedProperties({
 			factory: ctx.childSessions,
 			launch,
@@ -1494,6 +1499,7 @@ export async function runSingleStepInner(
 				? { content: childWrittenOutput, path: step.outputPath, authoritative: step.outputMode === "file-only", durable: resolvedOutput.savedPath !== undefined }
 				: undefined,
 			cwd: step.cwd ?? ctx.cwd,
+			stagedIndexBaseline,
 			signal: combinedAbortSignal([ctx.timeoutSignal, ctx.stopSignal]),
 			abortMessage: ctx.stopSignal?.aborted ? ctx.stopMessage ?? "Subagent stopped by user." : ctx.timeoutMessage ?? "Subagent timed out.",
 			reportOptional: isAgentContract(step.agentContract),
@@ -1514,6 +1520,12 @@ export async function runSingleStepInner(
 	const acceptanceFailure = effectiveAcceptance ? acceptanceFailureMessage(effectiveAcceptance) : undefined;
 	const acceptanceCanFailRun = acceptanceFailure && effectiveAcceptance?.explicit && (finalResult?.exitCode ?? 1) === 0 && !finalResult?.interrupted && !timedOutAfterAcceptance && !stoppedAfterAcceptance && !isAgentContract(step.agentContract);
 	const effectiveFinalExitCode = timedOutAfterAcceptance || stoppedAfterAcceptance ? 1 : acceptanceCanFailRun ? 1 : finalResult?.exitCode ?? 1;
+	// A passing typed gate supplies the structured output for runs that have no
+	// outputSchema of their own; preflight rejects the combination.
+	const typedGate = typedVerifyOutput(effectiveAcceptance);
+	if (typedGate && finalResult && finalResult.structuredOutput === undefined && effectiveFinalExitCode === 0) {
+		finalResult = { ...finalResult, structuredOutput: typedGate.value };
+	}
 	const intercomDetachReceipt = finalResult?.finalOutput === INTERCOM_DETACH_RECEIPT;
 	const baseFinalError = stoppedAfterAcceptance
 		? ctx.stopMessage ?? "Subagent stopped by user."
@@ -3775,7 +3787,6 @@ export async function runSubagent(
 					nestedRoute: config.nestedRoute,
 					capabilityCeiling: config.capabilityCeiling,
 					runFanoutBudget: config.runFanoutBudget,
-					hostAvailableBuiltins: config.hostAvailableBuiltins,
 					registerInterrupt: (interrupt) => registerStepInterrupt(fi, interrupt),
 					registerTimeout: (interrupt) => registerStepTimeout(fi, interrupt),
 					registerStop: (stop) => registerStepStop(fi, stop),
@@ -4189,7 +4200,6 @@ export async function runSubagent(
 							nestedRoute: config.nestedRoute,
 							capabilityCeiling: config.capabilityCeiling,
 							runFanoutBudget: config.runFanoutBudget,
-							hostAvailableBuiltins: config.hostAvailableBuiltins,
 							registerInterrupt: (interrupt) => registerStepInterrupt(fi, interrupt),
 							registerTimeout: (interrupt) => registerStepTimeout(fi, interrupt),
 							registerStop: (stop) => registerStepStop(fi, stop),
@@ -4593,7 +4603,6 @@ export async function runSubagent(
 				nestedRoute: config.nestedRoute,
 				capabilityCeiling: config.capabilityCeiling,
 				runFanoutBudget: config.runFanoutBudget,
-				hostAvailableBuiltins: config.hostAvailableBuiltins,
 				registerInterrupt: (interrupt) => registerStepInterrupt(flatIndex, interrupt),
 				registerTimeout: (interrupt) => registerStepTimeout(flatIndex, interrupt),
 				registerStop: (stop) => registerStepStop(flatIndex, stop),

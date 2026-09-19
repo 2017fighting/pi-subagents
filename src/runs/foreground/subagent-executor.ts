@@ -30,7 +30,6 @@ import type { MainWatchdogRuntime } from "../../watchdog/runtime.ts";
 import { applyWatchdogLaunchRules } from "../../watchdog/rules.ts";
 import { childWatchdogProgressForModel } from "../../watchdog/child-status.ts";
 import { normalizeParentModel, resolveEffectiveSubagentModel, resolveModelOrigin, resolveModelSelection, type ModelOrigin, type ParentModel } from "../shared/model-resolution.ts";
-import { getHostBuiltinToolNames } from "../shared/child-tool-plan.ts";
 import { projectChainOutputSchemas, resolveEffectiveOutputSchema } from "../shared/child-launch-plan.ts";
 import { formatRetainedChildren, listRetainedChildren } from "../background/retained-children.ts";
 import { resolveModelScopesForAgent, type ModelScopeConfig } from "../shared/model-scope.ts";
@@ -55,7 +54,7 @@ import { isScheduledRunAction } from "../background/scheduled-runs.ts";
 import { encodeIndexSegment } from "../background/index-segment.ts";
 import { enqueueChainAppendRequest, readPendingChainAppendRequests, runnerStepOutputNames } from "../background/chain-append.ts";
 import { ChainOutputValidationError, validateChainOutputBindingsWithContext } from "../shared/chain-outputs.ts";
-import { normalizeGateAcceptance, resolveAcceptanceReportMode, validateAcceptanceInput, validateExecutionAcceptance, validateExecutionAcceptancePolicy } from "../shared/acceptance.ts";
+import { acceptanceHasTypedVerify, normalizeGateAcceptance, resolveAcceptanceReportMode, TYPED_VERIFY_OUTPUT_SCHEMA_CONFLICT, validateAcceptanceInput, validateExecutionAcceptance, validateExecutionAcceptancePolicy } from "../shared/acceptance.ts";
 import { canPreferFork, createForkContextResolver, resolveSubagentLaunchContext } from "../../shared/fork-context.ts";
 import { createPrunedForkSessionWriter } from "../../shared/pruned-fork.ts";
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
@@ -4017,7 +4016,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			remoteReads: foregroundMachine ? readsOverride : undefined,
 			permissions: deps.config.permissions,
 			runtimeSnapshotHost: deps.pi,
-			hostAvailableBuiltins: getHostBuiltinToolNames(deps.pi),
 			parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 			requiredExtensions,
 			llmIntentArbiter: createTaskMutationArbiter({ model: ctx.model, modelRegistry: ctx.modelRegistry, sessionId: ctx.sessionManager.getSessionId() }),
@@ -4825,6 +4823,15 @@ function normalizeGateParams(params: SubagentParamsLike): GateParamsNormalizatio
 	if (params.gate === undefined) return { ok: true, params };
 	const { gate: _gate, ...rest } = params;
 	return { ok: true, params: { ...rest, ...(normalized.acceptance !== undefined ? { acceptance: normalized.acceptance } : {}) } };
+}
+
+function describeTypedVerifyOutputSchemaConflict(effective: SubagentParamsLike, requested: SubagentParamsLike): string | undefined {
+	if (!acceptanceHasTypedVerify(effective.acceptance)) return undefined;
+	if (effective.outputSchema === undefined || effective.outputSchema === false) return undefined;
+	const agent = effective.agent ?? "?";
+	const schemaSource = requested.outputSchema !== undefined && requested.outputSchema !== false ? "outputSchema" : `agent '${agent}' outputSchema`;
+	const verifySource = requested.gate !== undefined ? "gate.output" : requested.acceptance !== undefined ? "acceptance.verify" : `agent '${agent}' defaultAcceptance`;
+	return `${verifySource}: ${TYPED_VERIFY_OUTPUT_SCHEMA_CONFLICT.replace("with outputSchema", `with ${schemaSource}`)}`;
 }
 
 function formatWorkflowValue(value: unknown): string {
@@ -6908,6 +6915,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		}
 		const modelScope = discovered.modelScope;
 		effectiveParams = applySingleAgentLaunchDefaults(effectiveParams, discoveredAgents);
+		// The gate shorthand, an explicit acceptance.verify list, and an agent's
+		// defaultAcceptance all normalize to verify commands, and the agent's
+		// frontmatter outputSchema has been merged by now, so this one check keeps
+		// a run to a single structured-output source regardless of spelling.
+		const typedVerifyConflict = describeTypedVerifyOutputSchemaConflict(effectiveParams, params);
+		if (typedVerifyConflict) return buildRequestedModeError(effectiveParams, typedVerifyConflict);
 		// An agent-level defaultContext is a preference, unlike an explicit request.
 		// Prefer fork only when the parent session is persisted and has a current leaf;
 		// otherwise use fresh immediately instead of launching a guaranteed-to-fail fork.

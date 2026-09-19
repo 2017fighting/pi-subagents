@@ -1028,6 +1028,10 @@ export interface AcceptanceVerifyCommand {
 	cwd?: string;
 	env?: Record<string, string>;
 	allowFailure?: boolean;
+	/** When "json", a passing command's stdout is parsed and becomes the run's structured output. */
+	output?: "json";
+	/** Optional JSON Schema the parsed stdout must satisfy; only meaningful with `output: "json"`. */
+	schema?: JsonSchemaObject;
 }
 
 export interface AcceptanceReviewGate {
@@ -1039,6 +1043,8 @@ export interface AcceptanceReviewGate {
 export interface AcceptanceConfig {
 	level?: AcceptanceLevel;
 	report?: "on" | "off";
+	/** Preserve an intentional launch-time staged index, while rejecting any terminal index change. */
+	preserveStagedIndex?: true;
 	criteria?: Array<string | AcceptanceGate>;
 	evidence?: AcceptanceEvidenceKind[];
 	verify?: AcceptanceVerifyCommand[];
@@ -1063,6 +1069,7 @@ export interface ResolvedAcceptanceConfig {
 	inferredReason: string[];
 	criteria: ResolvedAcceptanceGate[];
 	evidence: AcceptanceEvidenceKind[];
+	preserveStagedIndex?: true;
 	verify: AcceptanceVerifyCommand[];
 	review?: AcceptanceReviewGate | false;
 	stopRules: string[];
@@ -1121,6 +1128,10 @@ export interface AcceptanceVerifyResult {
 		diffHash: string;
 	};
 	artifactError?: string;
+	/** Parsed stdout of a passing `output: "json"` command. */
+	structuredOutput?: unknown;
+	/** Why a passing `output: "json"` command still failed: invalid JSON, truncated stdout, or schema mismatch. */
+	structuredOutputError?: string;
 }
 
 export interface AcceptanceReviewResult {
@@ -2485,8 +2496,6 @@ export interface RunSyncOptions {
 	preferredModelProvider?: string;
 	/** Parent Pi event host used to snapshot runtime-registered MCP servers before child launch. */
 	runtimeSnapshotHost?: import("../runs/shared/mcp-direct-tool-allowlist.ts").McpRuntimeSnapshotHost;
-	/** Builtin tool names the host runtime provides; used to intersect agent-declared tools. */
-	hostAvailableBuiltins?: readonly string[];
 	/** Optional subagent model-scope enforcement. */
 	modelScope?: ModelScopeRule | ModelScopeRule[];
 	/** Skills to make available (overrides agent default if provided) */

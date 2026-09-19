@@ -15,7 +15,6 @@ import { createTempDir, events, makeAgent, makeMinimalCtx, removeTempDir, resolv
 import { deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, requestAsyncSteer } from "../../src/runs/background/control-channel.ts";
 import { writeAtomicJson } from "../../src/shared/atomic-json.ts";
 import { runSync } from "../../src/runs/foreground/execution.ts";
-import { getHostBuiltinToolNames } from "../../src/runs/shared/child-tool-plan.ts";
 import { SUBAGENT_ASYNC_STARTED_EVENT, SUBAGENT_LIFECYCLE_ARTIFACT_VERSION } from "../../src/shared/types.ts";
 import type { AsyncResultPayload, AsyncStatusPayload, MockPiCallRecord } from "../support/async-execution-fixture.ts";
 import {
@@ -1016,6 +1015,34 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.ok(elapsedMs < timeoutMs + 4_000, `timeout should cancel acceptance verification well before the verify command completes, elapsed ${elapsedMs}ms`);
 	});
 
+	it("bridges a typed gate's json stdout into an async child's structuredOutput", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "Review complete. See report." });
+		const id = `async-typed-gate-${Date.now().toString(36)}`;
+		executeAsyncSingle(id, {
+			agent: "reviewer",
+			task: "Review the report without edits",
+			agentConfig: makeAgent("reviewer"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: true, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: true, cleanupDays: 7 },
+			artifactsDir: path.join(tempDir, ".pi/subagents", "artifacts"),
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+			acceptance: {
+				level: "verified",
+				verify: [{ id: "gate", command: `${process.execPath} -e "process.stdout.write(JSON.stringify({ verdict: 'blocked' }))"`, output: "json", schema: { type: "object", required: ["verdict"] } }],
+			},
+		});
+
+		const resultPath = await waitForAsyncResultFile(id, 10_000);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.state, "complete", payload.results[0]?.error);
+		assert.equal(payload.results[0]?.acceptance?.status, "verified");
+		assert.deepEqual(payload.results[0]?.acceptance?.verifyRuns?.[0]?.structuredOutput, { verdict: "blocked" });
+		assert.deepEqual(payload.results[0]?.structuredOutput, { verdict: "blocked" });
+		const status = await waitForAsyncState(id, (candidate) => candidate.state === "complete");
+		assert.deepEqual(status.steps?.[0]?.structuredOutput, { verdict: "blocked" });
+	});
+
 	it("async launch messages tell the parent not to sleep-poll", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		const artifactConfig = {
 			enabled: false,
@@ -1122,9 +1149,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const agent = makeAgent("extension-worker", { tools, subagentOnlyExtensions: [path.join(tempDir, "child-provider.ts")] });
 		fs.writeFileSync(agent.subagentOnlyExtensions![0]!, "export default function () {}\n");
 		mockPi.onCall({ output: "foreground done" });
-		const foreground = await runSync(tempDir, [agent], agent.name, "Inspect using fixture search", {
-			hostAvailableBuiltins: getHostBuiltinToolNames(host), acceptance: false,
-		});
+		const foreground = await runSync(tempDir, [agent], agent.name, "Inspect using fixture search", { acceptance: false });
 		assert.equal(foreground.exitCode, 0, foreground.error);
 		assert.deepEqual(mockPi.sessions[0]?.launch.tools, tools);
 		assert.deepEqual(mockPi.sessions[0]?.launch.runtime.requiredTools, tools);
@@ -1342,7 +1367,28 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(status.steps?.[0]?.acceptance?.status, "review-required");
 	});
 
+	it("persists background staged-index baseline failures without launching a child", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		const id = `async-preserved-index-failure-${Date.now().toString(36)}`;
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Preserve the staged index",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-preserved-index" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+			acceptance: { level: "checked", preserveStagedIndex: true },
+		});
+		const payload = JSON.parse(fs.readFileSync(await waitForAsyncResultFile(id, 10_000), "utf-8")) as AsyncResultPayload;
+		const status = await waitForAsyncState(id, (candidate) => candidate.state === "failed");
+		const diagnostic = /Unable to capture staged index baseline:.*not a git repository/is;
 
+		assert.equal(payload.success, false);
+		assert.match(payload.results[0]?.error ?? "", diagnostic);
+		assert.equal(status.steps?.[0]?.status, "failed");
+		assert.match(status.steps?.[0]?.error ?? "", diagnostic);
+		assert.equal(mockPi.callCount(), 0);
+	});
 
 	it("async chains reject malformed named output references before spawning", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		const id = `async-malformed-output-ref-${Date.now().toString(36)}`;
