@@ -113,6 +113,24 @@ describe("builtin agent overrides", () => {
 		assert.throws(() => discoverAgentsAll(tempProject), /field 'machine' must be a non-empty string or false/u);
 	});
 
+	it("replaces and clears custom-agent allowedAgents while preserving explicit deny-all", () => {
+		writeProjectAgent(tempProject, "coordinator", "---\nname: coordinator\ndescription: Coordinator\nallowedAgents: scout\n---\n\nCoordinate.\n");
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { agentOverrides: { coordinator: { allowedAgents: false } } },
+		});
+		assert.equal(discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "coordinator")?.allowedAgents, undefined);
+
+		writeJson(path.join(tempProject, ".pi", "settings.json"), {
+			subagents: { agentOverrides: { coordinator: { allowedAgents: [] } } },
+		});
+		assert.deepEqual(discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "coordinator")?.allowedAgents, []);
+
+		writeJson(path.join(tempProject, ".pi", "settings.json"), {
+			subagents: { agentOverrides: { coordinator: { allowedAgents: ["worker", "reviewer"] } } },
+		});
+		assert.deepEqual(discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "coordinator")?.allowedAgents, ["reviewer", "worker"]);
+	});
+
 	it("rejects removed fallbackModels in user agent overrides", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: { agentOverrides: { worker: { fallbackModels: ["model/backup"] } } },

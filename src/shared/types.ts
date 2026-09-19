@@ -827,6 +827,7 @@ export interface SteeringRecoveryDescriptor {
 	tools?: string[];
 	excludeTools?: string[];
 	allowNestedSubagents?: boolean;
+	allowedAgents?: string[];
 	extensions?: string[];
 	subagentOnlyExtensions?: string[];
 	mcpDirectTools?: string[];

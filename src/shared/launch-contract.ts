@@ -55,6 +55,7 @@ export function projectAgentDefinition(agent: AgentConfig): Record<string, unkno
 		tools: agent.tools,
 		excludeTools: agent.excludeTools,
 		allowNestedSubagents: agent.allowNestedSubagents,
+		allowedAgents: agent.allowedAgents,
 		mcpDirectTools: agent.mcpDirectTools,
 		extensions: agent.extensions,
 		subagentOnlyExtensions: agent.subagentOnlyExtensions,

@@ -23,7 +23,7 @@ import type { StructuredOutputRuntime } from "./structured-output.ts";
 import type { ChildToolDiagnostic } from "./tool-availability.ts";
 import type { RuntimeAcknowledgedChildExtensions } from "../../shared/types.ts";
 import { encodeExtensionBindings, PI_SUBAGENT_EXTENSION_BINDINGS_ENV, type ExtensionBindings } from "./extension-bindings.ts";
-import type { ResolvedSubagentCapabilityCeiling, SubagentCapabilityAudit } from "./capability-ceiling.ts";
+import { intersectSubagentCapabilityCeilings, type ResolvedSubagentCapabilityCeiling, type SubagentCapabilityAudit } from "./capability-ceiling.ts";
 import {
 	isSubagentRuntimeExtensionPath,
 	projectLaunchResolvedChildExtensions,
@@ -106,6 +106,7 @@ export interface BuildInProcessChildLaunchInput {
 	waitToolEnabled?: boolean;
 	waitToolDefaultTimeoutMs?: number;
 	allowNestedSubagents?: boolean;
+	descendantAllowedAgents?: string[];
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	thinkingCeiling?: ThinkingLevel;
 	maxSubagentDepth?: number;
@@ -183,6 +184,13 @@ function childStorage(input: BuildInProcessChildLaunchInput): ChildSessionStorag
 
 export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput): InProcessChildLaunch {
 	const requiredExtensions = input.requiredExtensions ?? input.inherited?.requiredExtensions ?? resolveRequiredChildExtensions(input.parentSessionId);
+	const agentCapabilityCeiling: ResolvedSubagentCapabilityCeiling | undefined = input.descendantAllowedAgents === undefined
+		? undefined
+		: { version: 1, allowedAgents: [...input.descendantAllowedAgents], denyExtensions: false, sources: [`agent:${input.childAgentName}`] };
+	const inheritedCeiling = inheritedCapabilityCeiling(input.inherited);
+	const capabilityCeilingForPlanning = agentCapabilityCeiling && !input.capabilityCeiling && !inheritedCeiling
+		? { version: 1 as const, denyExtensions: false, sources: [] }
+		: input.capabilityCeiling;
 	const toolPlan = resolvePiLaunchToolPlan({
 		tools: input.tools,
 		excludeTools: input.excludeTools,
@@ -196,12 +204,16 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		structuredOutput: Boolean(input.structuredOutput),
 		fast: input.fast,
 		model: input.model,
-		capabilityCeiling: input.capabilityCeiling,
-		inheritedCapabilityCeiling: inheritedCapabilityCeiling(input.inherited),
+		capabilityCeiling: capabilityCeilingForPlanning,
+		inheritedCapabilityCeiling: inheritedCeiling,
 		agentName: input.childAgentName,
 		permissionRules: input.permissionRules,
 		runtimeSnapshotHost: input.runtimeSnapshotHost,
 	});
+	toolPlan.capabilityCeiling = intersectSubagentCapabilityCeilings(toolPlan.capabilityCeiling, agentCapabilityCeiling);
+	if (toolPlan.capabilityAudit && toolPlan.capabilityCeiling) {
+		toolPlan.capabilityAudit = { ...toolPlan.capabilityAudit, ceiling: toolPlan.capabilityCeiling };
+	}
 
 	const inherited = input.inherited;
 	const fanout = toolPlan.fanoutAuthorized;

@@ -128,6 +128,30 @@ describe("agent outputSchema frontmatter", () => {
 	}));
 });
 
+describe("agent allowedAgents frontmatter", () => {
+	it("preserves omission and empty lists, round-trips canonical lists, and rejects malformed names", () => withTempHome(() => {
+		const project = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-allowed-agents-"));
+		tempDirs.push(project);
+		const dir = path.join(project, ".pi", "agents");
+		writeAgent(path.join(dir, "omitted.md"), "---\nname: omitted\ndescription: Omitted\n---\n\nPrompt.\n");
+		writeAgent(path.join(dir, "empty.md"), "---\nname: empty\ndescription: Empty\nallowedAgents:\n---\n\nPrompt.\n");
+		writeAgent(path.join(dir, "listed.md"), "---\nname: listed\ndescription: Listed\nallowedAgents: worker, scout\n---\n\nPrompt.\n");
+		writeAgent(path.join(dir, "blocked.md"), "---\nname: blocked\ndescription: Blocked\nallowedAgents:\n  - reviewer\n  - package.scout\n---\n\nPrompt.\n");
+		writeAgent(path.join(dir, "invalid.md"), "---\nname: invalid\ndescription: Invalid\nallowedAgents: bad name\n---\n\nPrompt.\n");
+
+		const discovered = discoverAgents(project, "project");
+		assert.equal(discovered.agents.find((entry) => entry.name === "omitted")?.allowedAgents, undefined);
+		assert.deepEqual(discovered.agents.find((entry) => entry.name === "empty")?.allowedAgents, []);
+		assert.deepEqual(discovered.agents.find((entry) => entry.name === "listed")?.allowedAgents, ["scout", "worker"]);
+		assert.deepEqual(discovered.agents.find((entry) => entry.name === "blocked")?.allowedAgents, ["package.scout", "reviewer"]);
+		assert.match(discovered.agentDiagnostics.find((entry) => entry.name === "invalid")?.error ?? "", /Invalid capability ceiling allowedAgents entry 'bad name'/u);
+
+		const listed = discovered.agents.find((entry) => entry.name === "listed")!;
+		writeAgent(path.join(dir, "listed.md"), serializeAgent(listed));
+		assert.deepEqual(discoverAgents(project, "project").agents.find((entry) => entry.name === "listed")?.allowedAgents, ["scout", "worker"]);
+	}));
+});
+
 describe("agent definition directory inspection", () => {
 	it("distinguishes absent, empty, candidates, unreadable, and non-directory paths", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-inspection-"));
@@ -338,6 +362,8 @@ Review carefully.`);
 		tempDirs.push(project);
 		writeAgent(path.join(project, ".pi", "agents", "external.md"), `---\nname: external\ndescription: External\nrunner:\n  type: external-cli\n  command: node\nmodel: provider/model\n---\nBody`);
 		assert.match(discoverAgents(project, "project").agentDiagnostics?.[0]?.error ?? "", /unsupported Pi-only fields: model/);
+		writeAgent(path.join(project, ".pi", "agents", "external.md"), `---\nname: external\ndescription: External\nrunner:\n  type: external-cli\n  command: node\nallowedAgents: worker\n---\nBody`);
+		assert.match(discoverAgents(project, "project").agentDiagnostics?.[0]?.error ?? "", /unsupported Pi-only fields: allowedAgents/);
 	}));
 
 	it("keeps valid agents executable when another agent is malformed", () => withTempHome(() => {

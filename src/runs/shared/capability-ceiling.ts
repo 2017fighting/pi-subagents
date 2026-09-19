@@ -63,6 +63,10 @@ function validateText(value: unknown, field: string): string {
 	return value.trim();
 }
 
+export function normalizeCapabilityCeilingAllowedAgents(values: unknown): string[] {
+	return normalizeCeiling({ allowedAgents: values } as SubagentCapabilityCeiling).allowedAgents!;
+}
+
 function normalizeCeiling(ceiling: SubagentCapabilityCeiling): ResolvedSubagentCapabilityCeiling {
 	if (!ceiling || typeof ceiling !== "object" || Array.isArray(ceiling)) throw new Error("Invalid capability ceiling; expected an object.");
 	const hasAllowedTools = Object.hasOwn(ceiling, "allowedTools");

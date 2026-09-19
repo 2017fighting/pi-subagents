@@ -12,6 +12,7 @@ import {
 } from "../../src/api/capability-ceiling.ts";
 import { runSync } from "../../src/runs/foreground/execution.ts";
 import { buildInProcessChildLaunch } from "../../src/runs/shared/child-launch.ts";
+import { buildRunnerChildLaunch } from "../../src/runs/background/runner-child-launch.ts";
 
 function agent(name: string): AgentConfig {
 	return {
@@ -99,5 +100,42 @@ describe("capability ceiling agent allowlist", () => {
 		assert.equal(capabilityAudit?.agentAllowed, true);
 		assert.deepEqual(capabilityAudit?.agentRestrictionSources, ["plan-mode"]);
 		assert.deepEqual(config.capabilityCeiling?.allowedAgents, ["reviewer"]);
+	});
+
+	it("applies the selected agent's descendant ceiling only after its parent-authorized launch", () => {
+		const base = {
+			host: "parent" as const,
+			cwd: process.cwd(),
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritGlobalContext: false,
+			inheritSkills: false,
+			childAgentName: "coordinator",
+			childIndex: 0,
+			capabilityCeiling: { version: 1 as const, allowedAgents: ["coordinator", "scout"], denyExtensions: false, sources: ["parent"] },
+		};
+		const launch = buildInProcessChildLaunch({ ...base, descendantAllowedAgents: ["scout", "worker"] });
+		assert.equal(launch.capabilityAudit?.agentAllowed, true);
+		assert.deepEqual(launch.config.capabilityCeiling?.allowedAgents, ["scout"]);
+		assert.deepEqual(launch.capabilityAudit?.ceiling, launch.config.capabilityCeiling);
+		assert.deepEqual(launch.config.capabilityCeiling?.sources, ["agent:coordinator", "parent"]);
+		assert.deepEqual(buildInProcessChildLaunch({ ...base, descendantAllowedAgents: [] }).config.capabilityCeiling?.allowedAgents, []);
+		const configuredOnly = buildInProcessChildLaunch({ ...base, capabilityCeiling: undefined, descendantAllowedAgents: [] });
+		assert.deepEqual(configuredOnly.capabilityAudit?.ceiling, configuredOnly.config.capabilityCeiling);
+		assert.deepEqual(configuredOnly.capabilityAudit?.ceiling.allowedAgents, []);
+	});
+
+	it("propagates the detached runner step snapshot through the common launch seam", () => {
+		const launch = buildRunnerChildLaunch({
+			agent: "coordinator",
+			task: "Coordinate",
+			inheritProjectContext: false,
+			inheritGlobalContext: false,
+			inheritSkills: false,
+			allowedAgents: ["scout", "worker"],
+			capabilityCeiling: { version: 1, allowedAgents: ["coordinator", "scout"], denyExtensions: false, sources: ["parent"] },
+		}, { cwd: process.cwd(), id: "allowed-agents-runner", flatIndex: 0 }, { sessionEnabled: false, watchdogStatus() {} });
+		assert.deepEqual(launch.config.capabilityCeiling?.allowedAgents, ["scout"]);
+		assert.deepEqual(launch.capabilityAudit?.ceiling, launch.config.capabilityCeiling);
 	});
 });
