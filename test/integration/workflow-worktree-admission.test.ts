@@ -24,6 +24,27 @@ function callCount(): number {
 
 describe("public workflow worktree admission", { skip: !available }, () => {
 	installAsyncExecutionHooks();
+	it("rejects a direct async worktree launch before returning a receipt", async () => {
+		const repo = createRepo("pi-direct-admission-dirty-");
+		fs.writeFileSync(path.join(repo, "untracked.txt"), "dirty");
+		const asyncDirExistedBefore = fs.existsSync(ASYNC_DIR);
+		const asyncEntriesBefore = new Set(asyncDirExistedBefore ? fs.readdirSync(ASYNC_DIR) : []);
+		try {
+			const executor = makeAdmissionExecutor();
+			const result = await executor.executePublic("direct-admission-dirty", {
+				agent: "worker", task: "Inspect", async: true, worktree: true, cwd: repo, output: false,
+			}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+
+			assert.equal(result.isError, true);
+			assert.match(result.content.map((item) => item.text).join("\n"), /worktree isolation requires a clean git working tree\. Commit or stash changes first\./);
+			assert.equal(result.details?.asyncId, undefined);
+			assert.equal(callCount(), 0);
+			assert.equal(fs.existsSync(ASYNC_DIR), asyncDirExistedBefore);
+			assert.deepEqual(new Set(asyncDirExistedBefore ? fs.readdirSync(ASYNC_DIR) : []), asyncEntriesBefore);
+		} finally {
+			fs.rmSync(repo, { recursive: true, force: true });
+		}
+	});
 	for (const async of [false, true]) {
 		for (const source of ["nonrepo", "dirty"] as const) {
 			it(`rejects a mixed ${source} group before child dispatch or budget claims (async=${async})`, async () => {

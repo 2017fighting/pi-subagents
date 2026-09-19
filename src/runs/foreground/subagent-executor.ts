@@ -6944,7 +6944,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			orchestratorTarget: sessionName,
 		});
 		const agents = applyScopedIntercomBridgeToAgents(discoveredAgents, intercomBridge, contextPolicy);
-		const runId = randomUUID();
 		const inheritedNestedRouteValue = inheritedNestedRoute(deps);
 		const nestedParentAddress = inheritedNestedRouteValue ? inheritedNestedParentAddress(deps) : undefined;
 		const shareEnabled = effectiveParams.share === true;
@@ -7011,6 +7010,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (externalAgent && (!effectiveAsync || effectiveParams.foregroundOnly === true)) {
 			return buildRequestedModeError(effectiveParams, `Agent '${externalAgent.name}' uses runner.type='${externalAgent.runner?.type}', which currently supports async/background execution only. Omit async or pass async:true; clarify and foregroundOnly are unsupported.`);
 		}
+		if (effectiveAsync && hasSingle && effectiveParams.resume === undefined && effectiveParams.worktree === true) {
+			try {
+				await preflightWorktreeSource(effectiveCwd, { signal });
+			} catch (error) {
+				return toExecutionErrorResult(effectiveParams, error, contextPolicy.contextSummary);
+			}
+		}
+		const runId = randomUUID();
 		const foregroundTimeout = resolveSingleAgentLaunchTimeout(
 			effectiveParams,
 			effectiveAsync,

@@ -15,6 +15,10 @@
 
 - Keep explicitly detached workflow children visible as running work, preserve their result lookup after the coordinator exits, and avoid reporting launch receipts as completed results. Thanks to [@shaharmor](https://github.com/shaharmor) for #2299.
 
+### Fixed
+
+- Reject direct async managed-worktree launches from a dirty source before returning a receipt or creating provisional run state. Thanks to [@rtbe](https://github.com/rtbe) for #2311.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights
