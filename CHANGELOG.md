@@ -6,6 +6,10 @@
 
 - Add `subagents.defaultSubagentOnlyExtensions` for shared child-only extension paths without disabling ambient extension discovery. Thanks to [@Shujakuinkuraudo](https://github.com/Shujakuinkuraudo) for #2284.
 
+### Fixed
+
+- Reject direct async managed-worktree launches from a dirty source before returning a receipt or creating provisional run state. Thanks to [@rtbe](https://github.com/rtbe) for #2311.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights
