@@ -385,6 +385,13 @@ describe("scripted workflow runtime", () => {
 		].join("\n"));
 		assert.equal(keyed.ok, false);
 		assert.ok(keyed.errors.some((error) => error.message.includes("'results.someChild' is keyed access")));
+
+		const shadowed = validateWorkflowScript([
+			`const results = await runs.all([{ key: "someChild", agent: "reviewer", task: "Review" }]);`,
+			`{ const results = { someChild: "local" }; emit(results.someChild); }`,
+			`return results[0].output;`,
+		].join("\n"));
+		assert.deepEqual(shadowed, { ok: true, errors: [] });
 	});
 
 	it("rejects statically non-JSON workflow boundary values", () => {

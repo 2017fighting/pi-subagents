@@ -19,6 +19,10 @@
 
 - Reject direct async managed-worktree launches from a dirty source before returning a receipt or creating provisional run state. Thanks to [@rtbe](https://github.com/rtbe) for #2311.
 
+### Fixed
+
+- Reject malformed inline and file-backed workflow scripts before async run state or child launches are created, with the same structured diagnostics as `action: "validate"`. Thanks to [@rtbe](https://github.com/rtbe) for #2309.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights
