@@ -6,6 +6,10 @@
 
 - Add `subagents.defaultSubagentOnlyExtensions` for shared child-only extension paths without disabling ambient extension discovery. Thanks to [@Shujakuinkuraudo](https://github.com/Shujakuinkuraudo) for #2284.
 
+### Fixed
+
+- Keep inline Fleet workflow coverage stable across heartbeat, counter, and token-window updates while revoking it for structural row changes, without resetting the adaptive widget layout for unchanged coverage. Thanks to [@swarajban](https://github.com/swarajban) for #2305.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights

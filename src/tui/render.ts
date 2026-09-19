@@ -2753,13 +2753,38 @@ const asyncWidgetUpdates = new WeakMap<ExtensionContext["ui"], (jobs: AsyncJobSt
 const inlineWorkflowCoverage = new WeakMap<ExtensionContext["ui"], ReadonlyMap<string, string>>();
 const asyncWidgetInvalidations = new WeakMap<ExtensionContext["ui"], () => void>();
 
-/** Include child identity and freshness in the roster's existing snapshot. */
+function inlineWorkflowDescendantShape(children: AsyncJobState["nestedChildren"]): unknown {
+	return children?.map((child) => [child.id, child.agent, inlineWorkflowDescendantShape(child.children)]);
+}
+
+function inlineWorkflowRowShape(job: AsyncJobState): unknown[] {
+	return [
+		job.asyncId,
+		job.parentWorkflowRunId,
+		job.workflowKey,
+		job.mode,
+		job.currentStep,
+		job.activeParallelGroup,
+		job.status,
+		job.context,
+		job.agents,
+		job.steps?.map((step, index) => [
+			step.index ?? index,
+			step.workflowKey,
+			step.agent,
+			step.status,
+			Boolean(step.runner),
+			inlineWorkflowDescendantShape(step.children),
+		]),
+		inlineWorkflowDescendantShape(job.nestedChildren),
+		job.hostSteps?.map((row) => [row.id, row.monitorKind, row.label]),
+		Boolean(job.workflowGraph),
+	];
+}
+
+/** Structural identity of the workflow rows that Fleet can cover. */
 export function inlineWorkflowRenderKey(job: AsyncJobState, children: AsyncJobState[]): string {
-	if (!children.length) return widgetRenderKey(job);
-	return JSON.stringify([widgetRenderKey(job), children.map((child) => [
-		child.asyncId, widgetRenderKey(child, true), child.context,
-		child.steps?.map((step) => [Boolean(step.runner), step.tokens?.window]), Boolean(child.workflowGraph),
-	])]);
+	return JSON.stringify([inlineWorkflowRowShape(job), children.map(inlineWorkflowRowShape)]);
 }
 
 /** Presentation-only coverage from the mounted inline Fleet roster, never configuration. */
@@ -2827,7 +2852,11 @@ function buildWidgetComponent(jobs: AsyncJobState[], ui: ExtensionContext["ui"])
 			resetWidgetLayoutSession();
 			tui.requestRender();
 		};
-		asyncWidgetInvalidations.set(ui, invalidate);
+		const invalidateCoverage = (): void => {
+			cachedLines = undefined;
+			tui.requestRender();
+		};
+		asyncWidgetInvalidations.set(ui, invalidateCoverage);
 		const update = (nextJobs: AsyncJobState[]): void => {
 			jobs = nextJobs;
 			cachedLines = undefined;
@@ -2845,7 +2874,7 @@ function buildWidgetComponent(jobs: AsyncJobState[], ui: ExtensionContext["ui"])
 			},
 			dispose(): void {
 				if (asyncWidgetUpdates.get(ui) === update) asyncWidgetUpdates.delete(ui);
-				if (asyncWidgetInvalidations.get(ui) === invalidate) asyncWidgetInvalidations.delete(ui);
+				if (asyncWidgetInvalidations.get(ui) === invalidateCoverage) asyncWidgetInvalidations.delete(ui);
 			},
 		});
 		container.render = (renderWidth: number): string[] => {
