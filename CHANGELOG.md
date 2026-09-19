@@ -2,11 +2,23 @@
 
 ## [Unreleased]
 
+## [0.69.0] - 2026-09-18
+
+### Highlights
+- Gates can now return a JSON verdict. Point `gate` at a script that prints JSON, and its output becomes the child's structured output, so workflows can branch on a post-run check without the parent reading the child's report.
+- Ghostty detection no longer misfires inside terminals like cmux that embed Ghostty, so you stop seeing AppleScript `-1728`/`-2741` errors or the wrong window being targeted.
+- Hosts without `npm` start up quietly instead of printing `npm: command not found`.
+
+### Added
+
+- Typed gates: `gate` accepts `{ command, output: "json", schema?, timeoutMs? }` alongside the plain string form. When the command passes, its JSON stdout becomes the child's `structuredOutput` (validated against `schema` when given). Empty, truncated, or invalid output fails the gate rather than silently dropping the verdict. Typed gates always run (they are never cached), and a run cannot combine one with an `outputSchema`. See `docs/` for using command-runner agents as typed workflow steps and `examples/typed-gate` for a runnable example.
+
 ### Fixed
 
-- The Ghostty inspector no longer takes over when `TERM_PROGRAM=ghostty` comes from a terminal that embeds the Ghostty kernel (such as cmux) instead of the standalone Ghostty app. Availability now requires the macOS host bundle id (`__CFBundleIdentifier`) to identify Ghostty itself; absent or different host identity declines to the `inspector.command` hint instead of targeting an unrelated Ghostty window or emitting `-1728`/`-2741` AppleScript errors. Thanks to [@wangpi26](https://github.com/wangpi26) for #2281.
-- Keep optional global package-root discovery silent when the package manager is unavailable, so a host without `npm` no longer prints `/bin/sh: npm: command not found` during startup. Thanks to [@PhrZer](https://github.com/PhrZer) for #2287.
-- Orca progress tabs no longer break under `fish`. The viewer one-liner no longer relies on backslashes, which fish collapses inside single quotes, so tabs mirror progress again instead of opening on a `node -e` `SyntaxError`.
+- The Ghostty inspector only activates when the macOS host bundle id identifies the standalone Ghostty app. Terminals that embed Ghostty (such as cmux) set `TERM_PROGRAM=ghostty` too, which previously targeted an unrelated Ghostty window or emitted `-1728`/`-2741` AppleScript errors; those hosts now fall back to the `inspector.command` hint. Thanks to [@wangpi26](https://github.com/wangpi26) for #2281.
+- Keep source-layout async runners on native Node TypeScript when child extensions are configured, while short-circuiting host peer aliases so Pi's extension loader and generated factories resolve the same filesystem targets. Thanks to [@qsgy-edge](https://github.com/qsgy-edge) for #2314.
+- Hosts without `npm` no longer print `/bin/sh: npm: command not found` during startup; global package-root discovery is optional and now stays silent when the package manager is missing. Thanks to [@PhrZer](https://github.com/PhrZer) for #2287.
+- Orca progress tabs no longer break under `fish`. The viewer one-liner no longer relies on backslashes, which fish collapses inside single quotes, so tabs mirror progress again instead of opening on a `node -e` `SyntaxError`. Thanks to [@yourfriendaaron](https://github.com/yourfriendaaron) for #2294.
 
 ## [0.68.0] - 2026-09-15
 

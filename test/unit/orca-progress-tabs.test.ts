@@ -355,11 +355,11 @@ test("viewer strips split terminal control sequences across poll ticks", { skip:
 	await new Promise((resolve) => setTimeout(resolve, 200));
 	tab.append("31mred OSC \u001b]0;secret");
 	await new Promise((resolve) => setTimeout(resolve, 200));
-	tab.append(" title\u0007visible\u0000\u0001\r\t\u007f\n");
+	tab.append(" title\u0007visible OSC-ST \u001b]0;hidden\u001b\\after-osc DCS-ST \u001bPpayload\u001b\\after-dcs\u0000\u0001\r\t\u007f\n");
 	tab.finish("failed");
 	const output = await outputPromise;
-	assert.match(output, /safe CSI red OSC visible\n/);
-	assert.doesNotMatch(output, /\u001b|31m|secret|title|\u0000|\u0001|\r|\t|\u007f/);
+	assert.match(output, /safe CSI red OSC visible OSC-ST after-osc DCS-ST after-dcs\n/);
+	assert.doesNotMatch(output, /\u001b|31m|secret|title|hidden|payload|\u0000|\u0001|\r|\t|\u007f/);
 });
 
 test("viewer one-liner survives shells that collapse backslashes inside single quotes", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
