@@ -46,6 +46,7 @@
 ### Fixed
 
 - Reconcile native foreground and background child usage from terminal child-session messages when live events are missing or partial. Thanks to [@riique](https://github.com/riique) for #2295 and #2296.
+- Keep project-scoped agent memory stable across standard linked Git worktrees. Thanks to [@freezscholte](https://github.com/freezscholte) for #2293.
 
 ### Fixed
 
