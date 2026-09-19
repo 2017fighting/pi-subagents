@@ -7,6 +7,10 @@
 - Add `subagents.defaultSubagentOnlyExtensions` for shared child-only extension paths without disabling ambient extension discovery. Thanks to [@Shujakuinkuraudo](https://github.com/Shujakuinkuraudo) for #2284.
 - Let agent frontmatter and `subagents.agentOverrides.<name>.allowedAgents` narrow which canonical agents a child may launch, without granting nested delegation or widening inherited capability ceilings. Thanks to [@shkrabov](https://github.com/shkrabov) for #2312.
 
+### Fixed
+
+- Prevent publishing the TypeScript source checkout directly to npm; only the compiled `dist-pkg` artifact is publishable. Thanks to [@niko-operal](https://github.com/niko-operal) for #2300.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights
