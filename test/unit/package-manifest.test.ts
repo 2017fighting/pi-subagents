@@ -103,6 +103,7 @@ function collectSourceFiles(dir: string): string[] {
 test("published extension APIs use supported package entrypoints", async () => {
 	const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf-8"));
 
+	assert.equal(packageJson.private, true, "the source checkout must not be publishable");
 	assert.deepEqual(packageJson.pi?.extensions, ["./index.ts"]);
 	assert.equal(packageJson.files?.includes("index.ts"), true);
 	assert.equal(packageJson.files?.includes("*.mjs"), true);
