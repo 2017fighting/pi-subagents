@@ -5,7 +5,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AsyncJobState, SubagentState } from "../../src/shared/types.ts";
 import { WIDGET_KEY } from "../../src/shared/types.ts";
 import { FLEET_STATUS_WIDGET_KEY, SubagentFleetStatus } from "../../src/tui/fleet-status.ts";
-import { renderWidget, setInlineWorkflowCoverage } from "../../src/tui/render.ts";
+import { inlineWorkflowRenderKey, renderWidget, setInlineWorkflowCoverage } from "../../src/tui/render.ts";
 
 const theme = { fg: (_name: string, text: string) => text, bg: (_name: string, text: string) => text, bold: (text: string) => text };
 type Mounted = { render(width: number): string[]; dispose?(): void };
@@ -26,12 +26,23 @@ function harness(maxAgentRows = 6, inspector: () => Promise<void> = async () => 
 	fleet.setContext(ctx);
 	renderWidget(ctx, [job]);
 	return { job, state, ctx, fleet, mounted, get requests() { return requests; }, setExpanded(value: boolean) { expanded = value; },
+		resetRequests() { requests = 0; },
 		asyncText: () => mounted.get(WIDGET_KEY)!.render(240).join("\n"),
 		roster: (width = 240) => mounted.get(FLEET_STATUS_WIDGET_KEY)!.render(width).join("\n"),
 		activate() { fleet.handleKey("\x1b[B"); },
 		close() { fleet.dispose(); mounted.get(WIDGET_KEY)?.dispose?.(); renderWidget(ctx, []); },
 	};
 }
+
+it("does not invalidate a disposed async widget when structural coverage changes", () => {
+	const h = harness();
+	try {
+		h.mounted.get(WIDGET_KEY)!.dispose?.();
+		h.resetRequests();
+		setInlineWorkflowCoverage(h.ctx.ui, new Map([[h.job.asyncId, "structural-change"]]));
+		assert.equal(h.requests, 0);
+	} finally { h.close(); }
+});
 
 it("collapses only after the actual same-UI roster renders, and restores on deactivation/disposal", () => {
 	const h = harness();
@@ -142,22 +153,78 @@ it("covers flat materialized leaf cards only after every row renders and checks 
 	} finally { h.close(); }
 });
 
-it("restores materialized detail when child context or step window changes without a refresh", () => {
-	for (const field of ["context", "window"] as const) {
-		const h = harness();
-		try {
-			const [alpha] = materialize(h);
-			const tokens = { input: 100, output: 20, total: 120, window: 100 };
-			alpha.steps = [{ agent: "alpha-worker", status: "running", tokens }];
-			h.activate(); h.roster();
-			assert.doesNotMatch(h.asyncText(), /alpha-worker/);
-			if (field === "context") alpha.context = "fork";
-			else tokens.window = 110;
-			assert.match(h.asyncText(), /alpha-worker/, field);
-			h.fleet.refresh(); h.roster();
-			assert.doesNotMatch(h.asyncText(), /alpha-worker/);
-		} finally { h.close(); }
-	}
+it("restores materialized detail when child context changes without a refresh", () => {
+	const h = harness();
+	try {
+		const [alpha] = materialize(h);
+		h.activate(); h.roster();
+		assert.doesNotMatch(h.asyncText(), /alpha-worker/);
+		alpha.context = "fork";
+		assert.match(h.asyncText(), /alpha-worker/);
+		h.fleet.refresh(); h.roster();
+		assert.doesNotMatch(h.asyncText(), /alpha-worker/);
+	} finally { h.close(); }
+});
+
+it("restores chain detail when scheduling changes Fleet row membership", () => {
+	const h = harness();
+	try {
+		const [alpha, beta] = materialize(h);
+		h.state.asyncJobs.delete(beta.asyncId);
+		alpha.mode = "chain";
+		alpha.currentStep = 0;
+		alpha.steps = [
+			{ index: 0, agent: "first-worker", status: "pending" },
+			{ index: 1, agent: "second-worker", status: "pending" },
+		];
+		renderWidget(h.ctx, [h.job, alpha]);
+		setInlineWorkflowCoverage(h.ctx.ui, new Map([[h.job.asyncId, inlineWorkflowRenderKey(h.job, [alpha])]]));
+		assert.doesNotMatch(h.asyncText(), /first-worker|second-worker/);
+
+		alpha.currentStep = 1;
+		assert.match(h.asyncText(), /second-worker/, "advancing the chain revokes coverage for the old row");
+		setInlineWorkflowCoverage(h.ctx.ui, new Map([[h.job.asyncId, inlineWorkflowRenderKey(h.job, [alpha])]]));
+		assert.doesNotMatch(h.asyncText(), /first-worker|second-worker/);
+
+		alpha.activeParallelGroup = true;
+		assert.match(h.asyncText(), /first-worker/, "opening a parallel group revokes single-row chain coverage");
+	} finally { h.close(); }
+});
+
+it("keeps structural coverage and layout stable across heartbeat and token-only updates", () => {
+	const h = harness();
+	try {
+		const [alpha] = materialize(h);
+		alpha.steps = [{ agent: "alpha-worker", status: "running", tokens: { input: 10, output: 2, total: 12, window: 10 } }];
+		const initialKey = inlineWorkflowRenderKey(h.job, [alpha]);
+		h.activate(); h.roster();
+		const beforeLines = h.asyncText().split("\n").length;
+		alpha.updatedAt = 9_000;
+		alpha.lastActivityAt = 8_000;
+		alpha.turnCount = 4;
+		alpha.toolCount = 7;
+		alpha.totalTokens = { input: 30, output: 8, total: 38 };
+		alpha.steps[0]!.tokens = { input: 30, output: 8, total: 38, window: 37 };
+		assert.equal(inlineWorkflowRenderKey(h.job, [alpha]), initialKey);
+		h.fleet.refresh(); h.roster();
+		assert.equal(h.asyncText().split("\n").length, beforeLines);
+		assert.match(h.asyncText(), /Workflow children shown in Fleet roster/);
+	} finally { h.close(); }
+});
+
+it("changes the coverage identity for membership, context, and descendant structure", () => {
+	const h = harness();
+	try {
+		const [alpha, beta] = materialize(h);
+		const key = inlineWorkflowRenderKey(h.job, [alpha, beta]);
+		alpha.context = "fork";
+		assert.notEqual(inlineWorkflowRenderKey(h.job, [alpha, beta]), key);
+		alpha.context = undefined;
+		alpha.nestedChildren = [{ id: "nested", agent: "nested-worker", state: "running" }];
+		assert.notEqual(inlineWorkflowRenderKey(h.job, [alpha, beta]), key);
+		alpha.nestedChildren = undefined;
+		assert.notEqual(inlineWorkflowRenderKey(h.job, [alpha]), key);
+	} finally { h.close(); }
 });
 
 it("revokes flat coverage on scroll, child replacement, and a new grandchild", () => {

@@ -27,6 +27,10 @@
 
 - Treat Windows `UNKNOWN` errors while scanning supervisor channel directories as transient when those temporary directories disappear, so polling keeps running and can recover. Thanks to [@asher-aqi](https://github.com/asher-aqi) for #2303.
 
+### Fixed
+
+- Keep inline Fleet workflow coverage stable across heartbeat, counter, and token-window updates while revoking it for structural row changes, without resetting the adaptive widget layout for unchanged coverage. Thanks to [@swarajban](https://github.com/swarajban) for #2305.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights
