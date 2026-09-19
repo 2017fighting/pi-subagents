@@ -6,6 +6,10 @@
 
 - Add `subagents.defaultSubagentOnlyExtensions` for shared child-only extension paths without disabling ambient extension discovery. Thanks to [@Shujakuinkuraudo](https://github.com/Shujakuinkuraudo) for #2284.
 
+### Fixed
+
+- Report actionable, rooted field paths for the selected branch of failed structured-output `if`/`then`/`else` schemas while preserving root `$defs`. Thanks to [@peedrr](https://github.com/peedrr) for #2317.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights
