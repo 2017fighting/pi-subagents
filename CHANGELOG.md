@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add `subagents.defaultSubagentOnlyExtensions` for shared child-only extension paths without disabling ambient extension discovery. Thanks to [@Shujakuinkuraudo](https://github.com/Shujakuinkuraudo) for #2284.
+
 ### Fixed
 
 - Keep retained-session startup acknowledgement and confirmation in separate atomic control files, so concurrent workflow observers cannot overwrite the confirmation and strand resumed children at the startup barrier. Thanks to [@luigiplr](https://github.com/luigiplr) for #2292.
@@ -19,6 +23,7 @@
 
 ### Fixed
 
+- A parent session's own `--tools` allowlist no longer limits which tools its children may hold. Pi filters a session's tool registry by that allowlist, so predicting a child's tools from the parent read a narrow dispatcher session as a runtime without `read`, `bash`, or `grep`, stripped those tools from every child, and compounded at each hop. Children are separate sessions that build their own tools, so the prediction is gone: a child now launches with the tools its agent declares and fails on its own registry, before its first model call, when one is genuinely missing. Thanks to [@carlesba](https://github.com/carlesba) for #2289.
 - The Ghostty inspector only activates when the macOS host bundle id identifies the standalone Ghostty app. Terminals that embed Ghostty (such as cmux) set `TERM_PROGRAM=ghostty` too, which previously targeted an unrelated Ghostty window or emitted `-1728`/`-2741` AppleScript errors; those hosts now fall back to the `inspector.command` hint. Thanks to [@wangpi26](https://github.com/wangpi26) for #2281.
 - Keep source-layout async runners on native Node TypeScript when child extensions are configured, while short-circuiting host peer aliases so Pi's extension loader and generated factories resolve the same filesystem targets. Thanks to [@qsgy-edge](https://github.com/qsgy-edge) for #2314.
 - Hosts without `npm` no longer print `/bin/sh: npm: command not found` during startup; global package-root discovery is optional and now stays silent when the package manager is missing. Thanks to [@PhrZer](https://github.com/PhrZer) for #2287.

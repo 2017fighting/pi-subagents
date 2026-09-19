@@ -158,7 +158,9 @@ Project settings win over user settings. Use `agentOverrides.<name>.extensions` 
 }
 ```
 
-A non-array value, an array containing a non-string entry, or an empty/whitespace-only string raises a settings error naming `defaultExtensions` and the offending settings file, matching the validation pattern used by `defaultModel` and `defaultThinking`.
+Set `subagents.defaultSubagentOnlyExtensions` to give agents without a `subagentOnlyExtensions` field a shared child-only extension list while preserving ambient extension discovery. An empty array is an explicit empty default but, unlike `defaultExtensions: []`, does not disable ambient extensions. An agent's frontmatter list (including `[]`) suppresses the default; user and then project `agentOverrides.<name>.subagentOnlyExtensions` replace it or clear it with `false`. Lists are not combined.
+
+The two defaults resolve independently, with an explicitly present project value winning over the user value. If both are set, `defaultExtensions` still disables ambient discovery and the child-only paths are loaded alongside its allowlist. Both reject non-arrays, non-string or blank entries with an error naming the setting and source file. Extension paths execute trusted code, so use project defaults only for trusted repositories and extensions.
 
 ## Inspecting the live mapping
 
