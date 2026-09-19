@@ -11,17 +11,20 @@ const launch = { session: {
 } } as InProcessChildLaunch;
 
 // Without the abort backstop this run never settles, so bound the test instead of hanging the suite.
-it("settles a timed-out run whose session creation never returns, and disposes a late session", { timeout: 10_000 }, async () => {
+it("settles a timed-out run whose session creation never returns, and contains late disposal rejection", { timeout: 10_000 }, async () => {
 	let releaseCreate!: (session: ChildSession) => void;
 	const createBlocked = new Promise<ChildSession>((resolve) => { releaseCreate = resolve; });
 	let timeout: (() => void) | undefined;
 	let prompted = false;
-	let disposed = false;
+	let disposeAttempted = false;
 	const session: ChildSession = {
 		subscribe() { return () => {}; },
 		async prompt() { prompted = true; },
 		async steer() {}, async followUp() {}, async abort() {},
-		async dispose() { disposed = true; },
+		async dispose() {
+			disposeAttempted = true;
+			throw new Error("late disposal failed");
+		},
 		messages: [], sessionId: "late-session", modelId: "mock/model",
 	};
 	const factory: ChildSessionFactory = { create: () => createBlocked, async dispose() {} };
@@ -42,6 +45,6 @@ it("settles a timed-out run whose session creation never returns, and disposes a
 
 	releaseCreate(session);
 	await new Promise((resolve) => setImmediate(resolve));
-	assert.equal(disposed, true);
+	assert.equal(disposeAttempted, true);
 	assert.equal(prompted, false);
 });

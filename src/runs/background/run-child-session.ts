@@ -643,7 +643,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 				const createInput = createReportedChildSessionInput(input.launch, input.transcriptWriter);
 				const created = await input.factory.create(createInput);
 				if (settled) {
-					void created.dispose();
+					await created.dispose().catch(() => undefined);
 					return;
 				}
 				session = created;
