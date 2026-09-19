@@ -6,6 +6,10 @@
 
 - Add `subagents.defaultSubagentOnlyExtensions` for shared child-only extension paths without disabling ambient extension discovery. Thanks to [@Shujakuinkuraudo](https://github.com/Shujakuinkuraudo) for #2284.
 
+### Fixed
+
+- Reconcile native foreground and background child usage from terminal child-session messages when live events are missing or partial. Thanks to [@riique](https://github.com/riique) for #2295 and #2296.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights

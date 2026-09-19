@@ -107,6 +107,7 @@ import {
 } from "../../watchdog/child-status.ts";
 import { buildInProcessChildLaunch, createReportedChildSessionInput } from "../shared/child-launch.ts";
 import { childSessionFactory, childSessionHasQueuedMessages, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent } from "../shared/child-session.ts";
+import { reconcileAttemptUsage } from "../shared/usage-reconciliation.ts";
 
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
 const acceptanceOutputByResult = new WeakMap<SingleResult, string>();
@@ -580,6 +581,7 @@ async function runSingleAttempt(
 	const exitCode = await new Promise<number>((resolve) => {
 		const jsonlWriter = createJsonlWriter(shared.jsonlPath, { pause() {}, resume() {} });
 		let session: ChildSession | undefined;
+		let messageBaseline: number | undefined;
 		let unsubscribe: (() => void) | undefined;
 		let sessionSettled = false;
 		let lifecycleFinished = false;
@@ -1326,6 +1328,13 @@ async function runSingleAttempt(
 			}
 			const finalCode = forcedDrainAfterFinalSuccess && !forcedDrainAfterEmptyTerminal ? 0 : closeError || promptError !== undefined ? 1 : 0;
 			if (!result.error && closeError) result.error = closeError;
+			if (session && messageBaseline !== undefined) {
+				result.usage = reconcileAttemptUsage(result.usage, session.messages, messageBaseline);
+				progress.tokens = result.usage.input + result.usage.output;
+				progress.inputTokens = result.usage.input;
+				progress.outputTokens = result.usage.output;
+				progress.turnCount = result.usage.turns;
+			}
 			finish(finalCode);
 		};
 
@@ -1409,6 +1418,7 @@ async function runSingleAttempt(
 					abortChild();
 				}
 				options.onChildSession?.({ steer: (text) => created.steer(text), followUp: (text) => created.followUp(text) });
+				messageBaseline = created.messages.length;
 				await created.prompt(`Task: ${task}`);
 				settle(undefined);
 			} catch (error) {
