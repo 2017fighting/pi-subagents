@@ -1440,7 +1440,7 @@ export default function() {
 		}
 	});
 
-	it("keeps revival confirmation independent from acknowledgement rewrites", { timeout: 40_000, skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
+	it("publishes each revival startup control on its distinct public file", { timeout: 40_000, skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
 		const agents = [makeAgent("worker", { completionGuard: false })];
 		const parentSessionFile = path.join(tempDir, "startup-control-parent.jsonl");
 		const sessionFile = path.join(tempDir, "startup-control-child.jsonl");
@@ -1466,20 +1466,25 @@ export default function() {
 		assert.ok(launch.details.asyncId);
 		await readAsyncPayload(launch.details.asyncId);
 
-		// Emulate a duplicate observer restoring the acknowledgement after the parent
-		// publishes confirmation. Confirmation must be a distinct, monotonic signal.
-		const preloadFile = path.join(tempDir, "rewrite-startup-ack.mjs");
+		const observedControls = path.join(tempDir, "observed-startup-controls.jsonl");
+		const preloadFile = path.join(tempDir, "observe-startup-controls.mjs");
 		fs.writeFileSync(preloadFile, `
 import { createRequire, syncBuiltinESMExports } from "node:module";
 const require = createRequire(import.meta.url);
 const fs = require("node:fs");
 const originalReadFileSync = fs.readFileSync;
+const observed = new Set();
 fs.readFileSync = function(filePath) {
 	const value = originalReadFileSync.apply(this, arguments);
-	if (String(filePath).endsWith("runner-startup-ack.json") && typeof value === "string") {
+	const match = String(filePath).match(/runner-startup-(ack|confirm|proceed)\\.json$/);
+	if (match && typeof value === "string") {
 		try {
 			const payload = JSON.parse(value);
-			if (payload.action === "confirm") return JSON.stringify({ ...payload, action: "ack" });
+			const event = JSON.stringify({ file: match[1], action: payload.action });
+			if (!observed.has(event)) {
+				observed.add(event);
+				fs.appendFileSync(${JSON.stringify(observedControls)}, event + "\\n");
+			}
 		} catch {}
 	}
 	return value;
@@ -1502,6 +1507,14 @@ syncBuiltinESMExports();
 		assert.ok(!resumed.isError, resumed.content[0]?.text);
 		assert.ok(resumed.details.asyncId);
 		assert.equal((await readAsyncPayload(resumed.details.asyncId)).success, true);
+		assert.deepEqual(
+			fs.readFileSync(observedControls, "utf8").trim().split("\n").map((line) => JSON.parse(line)),
+			[
+				{ file: "ack", action: "ack" },
+				{ file: "confirm", action: "confirm" },
+				{ file: "proceed", action: "proceed" },
+			],
+		);
 	});
 
 	it("aligns initial and resumed background forked sessions with an explicit child cwd", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
