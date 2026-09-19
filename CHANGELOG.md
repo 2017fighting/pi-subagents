@@ -2,10 +2,23 @@
 
 ## [Unreleased]
 
+## [0.69.0] - 2026-09-18
+
+### Highlights
+- Gates can now return a JSON verdict. Point `gate` at a script that prints JSON, and its output becomes the child's structured output, so workflows can branch on a post-run check without the parent reading the child's report.
+- Ghostty detection no longer misfires inside terminals like cmux that embed Ghostty, so you stop seeing AppleScript `-1728`/`-2741` errors or the wrong window being targeted.
+- Hosts without `npm` start up quietly instead of printing `npm: command not found`.
+
+### Added
+
+- Typed gates: `gate` accepts `{ command, output: "json", schema?, timeoutMs? }` alongside the plain string form. When the command passes, its JSON stdout becomes the child's `structuredOutput` (validated against `schema` when given). Empty, truncated, or invalid output fails the gate rather than silently dropping the verdict. Typed gates always run (they are never cached), and a run cannot combine one with an `outputSchema`. See `docs/` for using command-runner agents as typed workflow steps and `examples/typed-gate` for a runnable example.
+
 ### Fixed
 
 - A parent session's own `--tools` allowlist no longer limits which tools its children may hold. Pi filters a session's tool registry by that allowlist, so predicting a child's tools from the parent read a narrow dispatcher session as a runtime without `read`, `bash`, or `grep`, stripped those tools from every child, and compounded at each hop. Children are separate sessions that build their own tools, so the prediction is gone: a child now launches with the tools its agent declares and fails on its own registry, before its first model call, when one is genuinely missing. Thanks to [@carlesba](https://github.com/carlesba) for #2289.
-- The Ghostty inspector no longer takes over when `TERM_PROGRAM=ghostty` comes from a terminal that embeds the Ghostty kernel (such as cmux) instead of the standalone Ghostty app. Availability now requires the macOS host bundle id (`__CFBundleIdentifier`) to identify Ghostty itself; absent or different host identity declines to the `inspector.command` hint instead of targeting an unrelated Ghostty window or emitting `-1728`/`-2741` AppleScript errors. Thanks to [@wangpi26](https://github.com/wangpi26) for #2281.
+- The Ghostty inspector only activates when the macOS host bundle id identifies the standalone Ghostty app. Terminals that embed Ghostty (such as cmux) set `TERM_PROGRAM=ghostty` too, which previously targeted an unrelated Ghostty window or emitted `-1728`/`-2741` AppleScript errors; those hosts now fall back to the `inspector.command` hint. Thanks to [@wangpi26](https://github.com/wangpi26) for #2281.
+- Keep source-layout async runners on native Node TypeScript when child extensions are configured, while short-circuiting host peer aliases so Pi's extension loader and generated factories resolve the same filesystem targets. Thanks to [@qsgy-edge](https://github.com/qsgy-edge) for #2314.
+- Hosts without `npm` no longer print `/bin/sh: npm: command not found` during startup; global package-root discovery is optional and now stays silent when the package manager is missing. Thanks to [@PhrZer](https://github.com/PhrZer) for #2287.
 
 ## [0.68.0] - 2026-09-15
 
@@ -39,6 +52,7 @@
 
 ### Fixed
 
+- Fail managed worktree setup before child launch when a required shared `node_modules` link cannot be created and verified, while preserving absent sources and preexisting destinations (#2283).
 - Allow checked writers to explicitly preserve a host-bound staged index while still rejecting child-created index changes (#2280).
 
 - Preserve the main watchdog's user scope across session compaction while clearing temporary activity state. Thanks to [@nimeetshah0](https://github.com/nimeetshah0) for #2263.
