@@ -25,6 +25,7 @@ import { isMutatingTool, resolveCurrentPath } from "../shared/long-running-guard
 import { effectiveToolTimeoutMs, formatToolTimeoutMessage, toolTimeoutCallKey } from "../shared/tool-timeout.ts";
 import { createReportedChildSessionInput, type InProcessChildLaunch } from "../shared/child-launch.ts";
 import { childSessionHasQueuedMessages, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent, type ChildSessionFactory } from "../shared/child-session.ts";
+import { reconcileAttemptUsage } from "../shared/usage-reconciliation.ts";
 import { formatSteerMessage } from "../shared/subagent-prompt-runtime.ts";
 import type { SteerDeliveryStatus, SteerRequest } from "./control-channel.ts";
 import { takeMatchingAcceptedSteer, unconsumedSteerReason } from "./steering.ts";
@@ -181,6 +182,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 		let currentPath: string | undefined;
 		let toolCount = 0;
 		let session: ChildSession | undefined;
+		let messageBaseline: number | undefined;
 		const acceptedSteers: Array<{ request: SteerRequest; text: string }> = [];
 		let unsubscribe: (() => void) | undefined;
 		let settled = false;
@@ -565,6 +567,9 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 			if (settled) return;
 			settled = true;
 			failUnconsumedSteers();
+			const terminalUsage = session && messageBaseline !== undefined
+				? reconcileAttemptUsage(usage, session.messages, messageBaseline)
+				: usage;
 			const closed = finish();
 			const finalOutput = getFinalOutput(messages);
 			let finalError = error ?? assistantError;
@@ -580,7 +585,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 				&& finalError === promptErrorMessage
 				&& isChildModelResolutionFailure(promptErrorMessage)
 				&& messages.length === 0
-				&& usage.turns === 0
+				&& terminalUsage.turns === 0
 				&& !input.launch.session.ambientExtensions) {
 				finalError = `${promptErrorMessage}\n\n${formatChildModelResolutionDiagnostic({ agent: input.launch.config.agent, model: input.launch.session.model, host: "runner", capabilityCeiling: input.launch.toolPlan.capabilityCeiling })}`;
 			}
@@ -598,7 +603,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 				const result: RunChildSessionResult = omitUndefined({
 					exitCode,
 					messages,
-					usage,
+					usage: terminalUsage,
 					toolCount,
 					durationMs: Date.now() - startedAt,
 					model,
@@ -680,6 +685,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 					return queued;
 				});
 				if (interrupted || timedOut || stopped) abortChild();
+				messageBaseline = created.messages.length;
 				await created.prompt(input.prompt);
 				promptSettled = true;
 				settle(undefined);

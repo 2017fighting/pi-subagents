@@ -43,6 +43,10 @@
 
 - Settle interrupted, stopped, or timed-out background runs even when child session creation hangs, and contain disposal failures if creation completes after settlement. Thanks to [@onorua](https://github.com/onorua) for #2320.
 
+### Fixed
+
+- Reconcile native foreground and background child usage from terminal child-session messages when live events are missing or partial. Thanks to [@riique](https://github.com/riique) for #2295 and #2296.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights
