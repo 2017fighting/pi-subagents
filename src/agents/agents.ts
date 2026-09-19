@@ -203,6 +203,7 @@ interface SubagentSettings {
 	defaultThinking?: string;
 	maxThinking?: ThinkingLevel;
 	defaultExtensions?: string[];
+	defaultSubagentOnlyExtensions?: string[];
 	disableBuiltins?: boolean;
 	disableThinking?: boolean;
 	modelScope?: ModelScopeConfig;
@@ -1218,6 +1219,14 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 		}
 		defaultExtensions = subagentsObject.defaultExtensions.map((item) => item.trim());
 	}
+	let defaultSubagentOnlyExtensions: string[] | undefined;
+	if ("defaultSubagentOnlyExtensions" in subagentsObject) {
+		if (!Array.isArray(subagentsObject.defaultSubagentOnlyExtensions)
+			|| subagentsObject.defaultSubagentOnlyExtensions.some((item) => typeof item !== "string" || !item.trim())) {
+			throw new Error(`Subagent settings in '${filePath}' have invalid 'defaultSubagentOnlyExtensions'; expected an array of non-empty strings.`);
+		}
+		defaultSubagentOnlyExtensions = subagentsObject.defaultSubagentOnlyExtensions.map((item) => item.trim());
+	}
 	let agentScanDirs: string[] | undefined;
 	if ("agentScanDirs" in subagentsObject) {
 		if (!Array.isArray(subagentsObject.agentScanDirs)
@@ -1248,6 +1257,7 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 		...(defaultThinking !== undefined ? { defaultThinking } : {}),
 		...(maxThinking !== undefined ? { maxThinking } : {}),
 		...(defaultExtensions !== undefined ? { defaultExtensions } : {}),
+		...(defaultSubagentOnlyExtensions !== undefined ? { defaultSubagentOnlyExtensions } : {}),
 		...(agentScanDirs !== undefined ? { agentScanDirs } : {}),
 		...(agentExcludeDirs !== undefined ? { agentExcludeDirs } : {}),
 		...(disableBuiltins !== undefined ? { disableBuiltins } : {}),
@@ -1383,16 +1393,40 @@ function applySubagentDefaultExtensions(agents: AgentConfig[], defaultExtensions
 	});
 }
 
+function resolveSubagentDefaultSubagentOnlyExtensions(
+	userSettings: SubagentSettings,
+	projectSettings: SubagentSettings,
+	projectSettingsPath: string | null,
+): string[] | undefined {
+	if (projectSettingsPath && projectSettings.defaultSubagentOnlyExtensions !== undefined) return projectSettings.defaultSubagentOnlyExtensions;
+	return userSettings.defaultSubagentOnlyExtensions;
+}
+
+function applySubagentDefaultSubagentOnlyExtensions(agents: AgentConfig[], defaultSubagentOnlyExtensions: string[] | undefined): AgentConfig[] {
+	if (defaultSubagentOnlyExtensions === undefined) return agents;
+	return agents.map((agent) => {
+		if (agent.subagentOnlyExtensions !== undefined) return agent;
+		const next = { ...agent, subagentOnlyExtensions: [...defaultSubagentOnlyExtensions] };
+		const frontmatterFields = agentFrontmatterFields.get(agent);
+		if (frontmatterFields) agentFrontmatterFields.set(next, frontmatterFields);
+		return next;
+	});
+}
+
 function applySubagentDefaults(
 	agents: AgentConfig[],
 	defaultModel: AgentModelSourceInfo | undefined,
 	defaultProvider: string | undefined,
 	defaultThinking: string | undefined,
 	defaultExtensions: string[] | undefined,
+	defaultSubagentOnlyExtensions: string[] | undefined,
 ): AgentConfig[] {
-	return applySubagentDefaultExtensions(
-		applySubagentDefaultThinking(applySubagentDefaultModel(agents, defaultModel, defaultProvider), defaultThinking),
-		defaultExtensions,
+	return applySubagentDefaultSubagentOnlyExtensions(
+		applySubagentDefaultExtensions(
+			applySubagentDefaultThinking(applySubagentDefaultModel(agents, defaultModel, defaultProvider), defaultThinking),
+			defaultExtensions,
+		),
+		defaultSubagentOnlyExtensions,
 	);
 }
 
@@ -2725,7 +2759,8 @@ function configuredAgentsForScope(sources: AgentDiscoverySources, scope: AgentSc
 	const defaultThinking = resolveSubagentDefaultThinking(userSettings, projectSettings, sources.projectSettingsPath);
 	const maxThinking = resolveSubagentMaxThinking(userSettings, projectSettings, sources.projectSettingsPath);
 	const defaultExtensions = resolveSubagentDefaultExtensions(userSettings, projectSettings, sources.projectSettingsPath);
-	const applyDefaults = (agents: AgentConfig[]): AgentConfig[] => applySubagentDefaults(agents, defaultModel, defaultProvider, defaultThinking, defaultExtensions);
+	const defaultSubagentOnlyExtensions = resolveSubagentDefaultSubagentOnlyExtensions(userSettings, projectSettings, sources.projectSettingsPath);
+	const applyDefaults = (agents: AgentConfig[]): AgentConfig[] => applySubagentDefaults(agents, defaultModel, defaultProvider, defaultThinking, defaultExtensions, defaultSubagentOnlyExtensions);
 	const builtin = applyBuiltinOverrides(applyDefaults(sources.builtinLoaded.agents), userSettings, projectSettings, sources.userSettingsPath, sources.projectSettingsPath);
 	const user = applyCustomAgentOverrides(
 		applyDefaults(scope === "project" ? [] : sources.userLoaded.flatMap((loaded) => loaded.loaded.agents)),
@@ -2871,12 +2906,14 @@ function discoverAgentsUncached(cwd: string, scope: AgentScope, preferredModelPr
 	const defaultThinking = resolveSubagentDefaultThinking(userSettings, projectSettings, projectSettingsPath);
 	const maxThinking = resolveSubagentMaxThinking(userSettings, projectSettings, projectSettingsPath);
 	const defaultExtensions = resolveSubagentDefaultExtensions(userSettings, projectSettings, projectSettingsPath);
+	const defaultSubagentOnlyExtensions = resolveSubagentDefaultSubagentOnlyExtensions(userSettings, projectSettings, projectSettingsPath);
 	const modelScope = projectSettings.modelScope ?? userSettings.modelScope;
 	const packageSubagentPaths = collectPackageSubagentPaths(effectiveCwd, { includeUser: scope !== "project", includeProject: scope !== "user" });
 	const isExcluded = agentExclusions(agentExclusionRoots(userSettingsPath, projectSettingsPath));
 	const directories: AgentDefinitionDirectoryReport[] = [reportAgentDefinitionDirectory("builtin", BUILTIN_AGENTS_DIR, BUILTIN_AGENT_DEFINITION_INSPECTION)];
 	const builtinLoaded = loadAgentsFromDefinitionFiles(BUILTIN_AGENT_DEFINITION_FILES, "builtin");
-	const builtinAgents = applyBuiltinOverrides(applySubagentDefaults(builtinLoaded.agents, defaultModel, defaultProvider, defaultThinking, defaultExtensions), userSettings, projectSettings, userSettingsPath, projectSettingsPath);
+	const applyDefaults = (agents: AgentConfig[]): AgentConfig[] => applySubagentDefaults(agents, defaultModel, defaultProvider, defaultThinking, defaultExtensions, defaultSubagentOnlyExtensions);
+	const builtinAgents = applyBuiltinOverrides(applyDefaults(builtinLoaded.agents), userSettings, projectSettings, userSettingsPath, projectSettingsPath);
 	const userScanDirs = settingsAgentScanDirs(userSettings.agentScanDirs ?? [], isExcluded);
 	const projectScanDirs = settingsAgentScanDirs(projectSettings.agentScanDirs ?? [], isExcluded);
 	const userLoaded = scope === "project" ? [] : [...extraUserAgentDirs(), ...userScanDirs.dirs, userDirOld, userDirNew].filter((dir) => !isExcluded(dir)).map((dir, discoveryPriority) => {
@@ -2884,7 +2921,7 @@ function discoverAgentsUncached(cwd: string, scope: AgentScope, preferredModelPr
 		directories.push(reportAgentDefinitionDirectory("user", dir, inspection));
 		return loadAgentsFromDir(dir, "user", discoveryPriority, undefined, inspection);
 	});
-	const userAgents = applyCustomAgentOverrides(applySubagentDefaults(userLoaded.flatMap((loaded) => loaded.agents), defaultModel, defaultProvider, defaultThinking, defaultExtensions), userSettings, projectSettings, userSettingsPath, projectSettingsPath);
+	const userAgents = applyCustomAgentOverrides(applyDefaults(userLoaded.flatMap((loaded) => loaded.agents)), userSettings, projectSettings, userSettingsPath, projectSettingsPath);
 	const projectInspections = scope === "user" ? new Map<string, AgentDefinitionInspection>() : new Map(projectCandidateDirs.filter((dir) => !isExcluded(dir)).map((dir) => [dir, inspectAgentDefinitionDirectory(dir, undefined, isExcluded)]));
 	if (scope !== "user") for (const [dir, inspection] of projectInspections) directories.push(reportAgentDefinitionDirectory("project", dir, inspection));
 	const projectLoaded = scope === "user" ? [] : [...projectScanDirs.dirs, ...projectAgentDirs].filter((dir) => !isExcluded(dir)).map((dir, discoveryPriority) => {
@@ -2892,7 +2929,7 @@ function discoverAgentsUncached(cwd: string, scope: AgentScope, preferredModelPr
 		if (!projectInspections.has(dir)) directories.push(reportAgentDefinitionDirectory("project", dir, inspection));
 		return loadAgentsFromDir(dir, "project", dir === projectAgentsDir ? 1 : discoveryPriority, undefined, inspection);
 	});
-	const projectAgents = applyCustomAgentOverrides(applySubagentDefaults(projectLoaded.flatMap((loaded) => loaded.agents), defaultModel, defaultProvider, defaultThinking, defaultExtensions), userSettings, projectSettings, userSettingsPath, projectSettingsPath);
+	const projectAgents = applyCustomAgentOverrides(applyDefaults(projectLoaded.flatMap((loaded) => loaded.agents)), userSettings, projectSettings, userSettingsPath, projectSettingsPath);
 	const packageLoaded = packageSubagentPaths.agents.filter((entry) => !isExcluded(entry.dir)).map((entry, index) => {
 		const inspection = inspectAgentDefinitionDirectory(entry.dir, undefined, isExcluded);
 		directories.push(reportAgentDefinitionDirectory("package", entry.dir, inspection));
@@ -2900,7 +2937,7 @@ function discoverAgentsUncached(cwd: string, scope: AgentScope, preferredModelPr
 	});
 	const packageMap = new Map<string, AgentConfig>();
 	for (const loaded of packageLoaded) for (const agent of loaded.agents) if (!packageMap.has(agent.name)) packageMap.set(agent.name, agent);
-	const packageAgents = applyCustomAgentOverrides(applySubagentDefaults(Array.from(packageMap.values()), defaultModel, defaultProvider, defaultThinking, defaultExtensions), userSettings, projectSettings, userSettingsPath, projectSettingsPath);
+	const packageAgents = applyCustomAgentOverrides(applyDefaults(Array.from(packageMap.values())), userSettings, projectSettings, userSettingsPath, projectSettingsPath);
 	const agents = applySubagentMaxThinking(mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents, packageAgents).filter((agent) => agent.disabled !== true), maxThinking);
 	const agentDiagnostics = [...builtinLoaded.diagnostics, ...userLoaded.flatMap((loaded) => loaded.diagnostics), ...projectLoaded.flatMap((loaded) => loaded.diagnostics), ...packageLoaded.flatMap((loaded) => loaded.diagnostics)];
 	return { agents, agentDiagnostics, projectAgentsDir, cwd: effectiveCwd, scope, directories, ...(modelScope !== undefined ? { modelScope } : {}), ...(maxThinking !== undefined ? { maxThinking } : {}) };

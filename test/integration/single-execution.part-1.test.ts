@@ -265,6 +265,96 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.details.results[0]?.timedOut, undefined);
 	});
 
+	it("preserves a blocked foreground delegated tool attempt without an execution-start event", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const blockedMessage = "Tool budget hard limit reached after 1 tool call (hard 0). The 'bash' tool is blocked so you can finalize from the context you already have.";
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [
+					// A still-pending earlier call must not be attributed as the blocked tool.
+					{ type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "notes.md" } },
+					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: true, content: [{ type: "text", text: blockedMessage }] } },
+					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "read-1", toolName: "read", isError: false, content: [{ type: "text", text: "ordinary notes" }] } },
+				] },
+				{ jsonl: [events.assistantMessage("I could not read the required canary because bash was blocked.")] },
+			],
+		});
+		const request: SubagentDelegationRequest = {
+			requestId: "delegated-tool-budget-blocked",
+			ownerRunId: "owner-1",
+			nodeId: "node-1",
+			agent: "bash-worker",
+			task: "Use bash to read the required canary.",
+			context: "fresh",
+			cwd: tempDir,
+			model: "mock/model",
+			toolBudget: { hard: 0, block: "*" },
+			result: { kind: "text" },
+		};
+		const result = await makeExecutor([makeAgent("bash-worker")]).executeDelegated(
+			request.requestId,
+			toSubagentDelegationExecutionParams(request),
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const child = result.details?.results?.[0];
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "delegated execution failed");
+		assert.equal(child?.toolBudgetBlocked, true);
+		assert.equal(child?.toolBudget?.blockedTool, "bash");
+		assert.equal(child?.finalOutput, "I could not read the required canary because bash was blocked.");
+
+		mockPi.onCall({ output: "No tool needed." });
+		const normal = await makeExecutor([makeAgent("bash-worker")]).executeDelegated(
+			"delegated-no-tool",
+			toSubagentDelegationExecutionParams({ ...request, requestId: "delegated-no-tool", task: "Answer without tools." }),
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(normal.details?.results?.[0]?.toolBudgetBlocked, undefined);
+		assert.equal(normal.details?.results?.[0]?.finalOutput, "No tool needed.");
+	});
+
+	it("does not classify ordinary tool output that merely quotes the block message", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const quoted = `src/log.md:12:Tool budget hard limit reached after 1 tool call (hard 0). The 'bash' tool is blocked so you can finalize from the context you already have.`;
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [
+					{ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "grep -rn 'Tool budget hard limit reached' src/" } },
+					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: false, content: [{ type: "text", text: quoted }] } },
+					{ type: "tool_execution_end", toolName: "bash" },
+				] },
+				{ jsonl: [events.assistantMessage("The phrase appears in a log; nothing was blocked.")] },
+			],
+		});
+		const request: SubagentDelegationRequest = {
+			requestId: "delegated-tool-budget-quoted",
+			ownerRunId: "owner-1",
+			nodeId: "node-1",
+			agent: "bash-worker",
+			task: "Search the repository for budget log lines.",
+			context: "fresh",
+			cwd: tempDir,
+			model: "mock/model",
+			toolBudget: { hard: 5, block: "*" },
+			result: { kind: "text" },
+		};
+		const result = await makeExecutor([makeAgent("bash-worker")]).executeDelegated(
+			request.requestId,
+			toSubagentDelegationExecutionParams(request),
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const child = result.details?.results?.[0];
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "delegated execution failed");
+		assert.equal(child?.toolBudgetBlocked, undefined);
+		assert.equal(child?.toolBudget?.outcome, "within-budget");
+		assert.equal(child?.finalOutput, "The phrase appears in a log; nothing was blocked.");
+	});
+
 	it("keeps public structured single-child calls foreground when async is disabled by default", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "Structured child used the foreground default" });
 		const executor = makeExecutor([makeAgent("echo")], {}, false);
