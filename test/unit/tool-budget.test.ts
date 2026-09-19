@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
 	DEFAULT_TOOL_BUDGET_BLOCK,
 	initialToolBudgetState,
+	isToolBudgetBlockedMessage,
 	shouldBlockToolForBudget,
 	toolBudgetBlockedMessage,
 	toolBudgetSoftNudge,
@@ -47,6 +48,19 @@ describe("tool-budget module", () => {
 		assert.equal(shouldBlockToolForBudget(budget, "read", 4), true);
 		assert.equal(shouldBlockToolForBudget(budget, "write", 4), false);
 		assert.equal(shouldBlockToolForBudget({ hard: 0, block: "*" }, "read", 1), true);
+	});
+
+	it("recognizes only the exact runtime block message for this budget and tool", () => {
+		const budget = { hard: 0, block: "*" };
+		const exact = toolBudgetBlockedMessage(budget, "bash", 1);
+		assert.equal(isToolBudgetBlockedMessage(budget, exact, "bash"), true);
+		assert.equal(isToolBudgetBlockedMessage({ hard: 2, block: "*" }, toolBudgetBlockedMessage({ hard: 2, block: "*" }, "bash", 3), "bash"), true, "plural count past the hard limit");
+		assert.equal(isToolBudgetBlockedMessage(budget, toolBudgetBlockedMessage({ hard: 3, block: "*" }, "bash", 4), "bash"), false, "different hard limit");
+		assert.equal(isToolBudgetBlockedMessage(budget, toolBudgetBlockedMessage(budget, "read", 1), "bash"), false, "different tool name");
+		assert.equal(isToolBudgetBlockedMessage(budget, `src/log.md:12:${exact}`, "bash"), false, "phrase embedded in ordinary tool output");
+		assert.equal(isToolBudgetBlockedMessage(budget, `${exact}\nnext line`, "bash"), false, "trailing output lines");
+		assert.equal(isToolBudgetBlockedMessage(budget, exact, undefined), false, "missing resolved tool name fails closed");
+		assert.equal(isToolBudgetBlockedMessage(budget, exact.replace("after 1 tool call", "after 0 tool call"), "bash"), false, "blocked count must exceed the hard limit");
 	});
 
 	it("formats user-facing budget messages", () => {
