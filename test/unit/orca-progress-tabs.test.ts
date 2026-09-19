@@ -355,11 +355,36 @@ test("viewer strips split terminal control sequences across poll ticks", { skip:
 	await new Promise((resolve) => setTimeout(resolve, 200));
 	tab.append("31mred OSC \u001b]0;secret");
 	await new Promise((resolve) => setTimeout(resolve, 200));
-	tab.append(" title\u0007visible\u0000\u0001\r\t\u007f\n");
+	tab.append(" title\u0007visible OSC-ST \u001b]0;hidden\u001b\\after-osc DCS-ST \u001bPpayload\u001b\\after-dcs\u0000\u0001\r\t\u007f\n");
 	tab.finish("failed");
 	const output = await outputPromise;
-	assert.match(output, /safe CSI red OSC visible\n/);
-	assert.doesNotMatch(output, /\u001b|31m|secret|title|\u0000|\u0001|\r|\t|\u007f/);
+	assert.match(output, /safe CSI red OSC visible OSC-ST after-osc DCS-ST after-dcs\n/);
+	assert.doesNotMatch(output, /\u001b|31m|secret|title|hidden|payload|\u0000|\u0001|\r|\t|\u007f/);
+});
+
+test("viewer one-liner survives shells that collapse backslashes inside single quotes", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
+	const dir = tempDir();
+	const capture = path.join(dir, "capture.json");
+	const fakeOrca = writeCaptureOrca(dir);
+	const tab = createOrcaProgressTab({
+		cwd: dir,
+		runId: "progress-fish-quoting",
+		agent: "worker",
+		index: 0,
+		config: { enabled: true },
+		command: fakeOrca,
+		env: { ...process.env, ORCA_TEST_CAPTURE: capture },
+	});
+	assert.ok(tab);
+	await waitForFile(capture);
+	const args = JSON.parse(fs.readFileSync(capture, "utf-8")) as string[];
+	const viewer = args[args.indexOf("--command") + 1]!;
+	// Orca runs --command through the user's login shell. fish collapses `\\`
+	// inside single quotes to `\`, so a backslash in the viewer one-liner reaches
+	// `node -e` as different source (unterminated string literal) and every progress
+	// tab opens on a SyntaxError instead of the mirror.
+	assert.equal(viewer.includes("\\"), false);
+	await tab.finish("failed");
 });
 
 test("mirror output keeps small writes that hit stream backpressure before the byte limit", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
