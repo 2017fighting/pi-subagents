@@ -987,9 +987,11 @@ Answer only from the supplied synthetic text.
 		);
 
 		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /validation failed before child launch; no children launched/);
-		assert.match(result.content[0]?.text ?? "", /'a', 'b', 'c', 'owner', 'review', 'owner-fix'/);
-		assert.match(result.content[0]?.text ?? "", /minimum required: 6; configured: 5/);
+		const payload = JSON.parse(result.content[0]?.text ?? "null") as { ok?: boolean; errors?: Array<{ kind?: string; message?: string }> };
+		assert.equal(payload.ok, false);
+		assert.equal(payload.errors?.[0]?.kind, "spawn-budget");
+		assert.match(payload.errors?.[0]?.message ?? "", /'a', 'b', 'c', 'owner', 'review', 'owner-fix'/);
+		assert.match(payload.errors?.[0]?.message ?? "", /minimum required: 6; configured: 5/);
 		assert.equal(mockPi.callCount(), 0);
 		assert.deepEqual(fs.readdirSync(tempDir).sort(), before);
 	});
@@ -1009,6 +1011,7 @@ Answer only from the supplied synthetic text.
 		);
 
 		assert.equal(result.isError, true);
+		assert.equal(result.details.mode, "management");
 		assert.deepEqual(JSON.parse(result.content[0]?.text ?? "null"), {
 			ok: false,
 			errors: [{ message: "runs.run key must be 1-128 characters using letters, numbers, '.', '_' or '-', and start with a letter or number.", line: 1, column: 17 }],
@@ -1046,6 +1049,29 @@ Answer only from the supplied synthetic text.
 		assert.match(JSON.stringify(offlinePreflightValidation.errors ?? []), /preflight\.lanes\[0\]\.key/);
 		assert.equal(mockPi.callCount(), 0);
 		assert.deepEqual(fs.readdirSync(tempDir).sort(), before);
+	});
+
+	it("rejects malformed public async workflows before creating run state", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), () => {
+			throw new Error("invalid workflows must not discover or launch agents");
+		});
+		const script = ["const value = 1;", "return (;"].join("\n");
+		const asyncDirsBefore = fs.existsSync(DIRS.async) ? fs.readdirSync(DIRS.async).sort() : [];
+		const callsBefore = mockPi.callCount();
+		const ctx = makeMinimalCtx(tempDir);
+		const validation = await executor.executePublic("malformed-validation", { action: "validate", workflowScript: script }, new AbortController().signal, undefined, ctx);
+		const result = await executor.executePublic("malformed-async", { workflowScript: script }, new AbortController().signal, undefined, ctx);
+
+		assert.equal(result.isError, true);
+		assert.equal(validation.details.mode, "management");
+		assert.equal(result.details.mode, "workflow");
+		assert.deepEqual(JSON.parse(result.content[0]?.text ?? "null"), JSON.parse(validation.content[0]?.text ?? "null"));
+		const payload = JSON.parse(result.content[0]?.text ?? "null") as { errors?: Array<{ line?: number; column?: number }> };
+		assert.deepEqual(payload.errors?.map(({ line, column }) => ({ line, column })), [{ line: 2, column: 9 }]);
+		assert.equal(mockPi.callCount(), callsBefore);
+		assert.equal(result.details.asyncId, undefined);
+		assert.equal(result.details.workflow?.receipt, undefined);
+		assert.deepEqual(fs.existsSync(DIRS.async) ? fs.readdirSync(DIRS.async).sort() : [], asyncDirsBefore);
 	});
 
 	it("rejects invalid public workflow acceptance defaults before mission or script work", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -3736,12 +3762,12 @@ Answer only from the supplied synthetic text.
 		assert.deepEqual(result.details.workflow?.trace.filter((entry) => entry.state !== "started").map(({ state }) => state).sort(), ["completed", "failed"]);
 	});
 
-	it("reports keyed runs.all result access after siblings settle", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("rejects keyed runs.all result access before launching children", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "first child completed", matchArgIncludes: "First task" });
 		mockPi.onCall({ output: "second child completed", matchArgIncludes: "Second task" });
 		const executor = makeExecutor([makeAgent("echo")]);
 
-		const result = await executor.execute(
+		const result = await executor.executePublic(
 			"scripted-workflow-runs-all-keyed-result-access",
 			{
 				async: false,
@@ -3759,10 +3785,42 @@ Answer only from the supplied synthetic text.
 		);
 
 		assert.equal(result.isError, true);
-		assert.equal(mockPi.callCount(), 2);
-		assert.match(result.content[0]?.text ?? "", /runs\.all resolves to an ordered array, not a key map/);
-		assert.match(result.content[0]?.text ?? "", /Use results\[0\], array destructuring, or results\.map/);
-		assert.deepEqual(result.details.workflow?.trace.filter((entry) => entry.state === "completed").map(({ key }) => key).sort(), ["first", "second"]);
+		assert.equal(mockPi.callCount(), 0);
+		const payload = JSON.parse(result.content[0]?.text ?? "null") as { ok?: boolean; errors?: Array<{ message?: string }> };
+		assert.equal(payload.ok, false);
+		assert.match(payload.errors?.[0]?.message ?? "", /runs\.all returns an ordered array/);
+		assert.match(payload.errors?.[0]?.message ?? "", /'children\.first' is keyed access/);
+		assert.equal(result.details.workflow, undefined);
+	});
+
+	it("allows keyed access on a nested binding that shadows a runs.all result", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "first child completed", matchArgIncludes: "First task" });
+		const executor = makeExecutor([makeAgent("echo")]);
+
+		const result = await executor.executePublic(
+			"scripted-workflow-runs-all-shadowed-result-access",
+			{
+				async: false,
+				workflowScript: `
+					const children = await runs.all([
+						{ key: "first", agent: "echo", task: "First task" }
+					]);
+					let local;
+					{
+						const children = { first: { output: "shadowed" } };
+						local = children.first.output;
+					}
+					return { local, child: children[0].output };
+				`,
+			},
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
+		assert.equal(mockPi.callCount(), 1);
+		assert.deepEqual(result.details.workflow?.value, { local: "shadowed", child: "first child completed" });
 	});
 
 	it("keeps array access working when runs.all child keys collide with array properties", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -3770,7 +3828,7 @@ Answer only from the supplied synthetic text.
 		mockPi.onCall({ output: "map child completed", matchArgIncludes: "Map task" });
 		const executor = makeExecutor([makeAgent("echo")]);
 
-		const result = await executor.execute(
+		const result = await executor.executePublic(
 			"scripted-workflow-runs-all-colliding-key-access",
 			{
 				async: false,

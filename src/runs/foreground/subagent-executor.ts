@@ -2783,6 +2783,19 @@ function buildRequestedModeError(params: SubagentParamsLike, message: string): A
 	);
 }
 
+function buildWorkflowValidationResult(
+	validation: ReturnType<typeof validateWorkflowScript>,
+	mode: "management" | "workflow",
+	preflight?: import("../../shared/types.ts").WorkflowPreflight,
+): AgentToolResult<Details> {
+	const payload = preflight ? { ...validation, preflight } : validation;
+	return {
+		content: [{ type: "text", text: JSON.stringify(payload) }],
+		...(validation.ok ? {} : { isError: true }),
+		details: { mode, results: [] },
+	};
+}
+
 function applySingleAgentLaunchDefaults(params: SubagentParamsLike, agents: AgentConfig[]): SubagentParamsLike {
 	if ((params.chain?.length ?? 0) > 0 || (params.tasks?.length ?? 0) > 0 || !params.agent) return params;
 	const agent = agents.find((candidate) => candidate.name === params.agent);
@@ -5065,12 +5078,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const validation = validateWorkflowScript(requestParams.workflowScript ?? "", {
 				maxSubagentSpawnsPerRun: requestParams.maxSubagentSpawnsPerRun ?? resolveMaxSubagentSpawnsPerRun(deps.config.maxSubagentSpawnsPerRun),
 			});
-			const payload = workflowPreflight ? { ...validation, preflight: workflowPreflight } : validation;
-			return {
-				content: [{ type: "text", text: JSON.stringify(payload) }],
-				...(validation.ok ? {} : { isError: true }),
-				details: { mode: "management", results: [] },
-			};
+			return buildWorkflowValidationResult(validation, "management", workflowPreflight);
 		}
 		const normalizedAction = typeof requestParams.action === "string" ? requestParams.action.trim() : requestParams.action;
 		if (normalizedAction === "resume" && requestParams.extensionBindings !== undefined) return buildRequestedModeError(requestParams, "extensionBindings is not supported with action='resume'; resume uses the original retained child binding.");
@@ -5085,14 +5093,15 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const workflowArgsEvidence = requestParams.args === undefined ? undefined : { args: requestParams.args, argsDigest: stableJsonDigest(requestParams.args) };
 			const workflowArgs = workflowArgsEvidence?.args;
 			const workflowArgsDigest = workflowArgsEvidence?.argsDigest;
-			const spawnBudgetValidation = validateWorkflowScript(requestParams.workflowScript, {
+			const workflowValidation = validateWorkflowScript(requestParams.workflowScript, {
 				maxSubagentSpawnsPerRun: requestParams.maxSubagentSpawnsPerRun ?? resolveMaxSubagentSpawnsPerRun(deps.config.maxSubagentSpawnsPerRun),
 			});
-			const spawnBudgetErrors = spawnBudgetValidation.errors.filter((error) => error.kind === "spawn-budget");
+			if (!workflowValidation.ok && publicExecution) return buildWorkflowValidationResult(workflowValidation, "workflow", workflowPreflight);
+			const spawnBudgetErrors = workflowValidation.errors.filter((error) => error.kind === "spawn-budget");
 			if (spawnBudgetErrors.length > 0) {
-				return buildRequestedModeError(requestParams, `workflowScript validation failed before child launch; no children launched. ${spawnBudgetErrors.map((error) => error.message).join(" ")}`);
+				return buildRequestedModeError(requestParams, `Workflow '${_id}' validation failed before child launch; no children launched. ${spawnBudgetErrors.map((error) => error.message).join(" ")}`);
 			}
-			for (const warning of spawnBudgetValidation.warnings ?? []) console.warn(`[pi-subagents] ${warning.message}`);
+			for (const warning of workflowValidation.warnings ?? []) console.warn(`[pi-subagents] ${warning.message}`);
 			const acceptanceErrors = validateAcceptanceInput(requestParams.acceptance);
 			if (acceptanceErrors.length > 0) return buildRequestedModeError(requestParams, acceptanceErrors.join(" "));
 			const foregroundWorkflowRunId = encodeIndexSegment(_id);

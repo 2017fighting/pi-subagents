@@ -1589,6 +1589,53 @@ function walkAst(node: unknown, visit: (node: AstNode) => void, includeNestedFun
 	}
 }
 
+function bindingPatternContainsName(node: unknown, name: string): boolean {
+	if (!astNode(node)) return false;
+	if (node.type === "Identifier") return node.name === name;
+	if (node.type === "RestElement") return bindingPatternContainsName(node.argument, name);
+	if (node.type === "AssignmentPattern") return bindingPatternContainsName(node.left, name);
+	if (node.type === "ArrayPattern" && Array.isArray(node.elements)) return node.elements.some((element) => bindingPatternContainsName(element, name));
+	if (node.type === "ObjectPattern" && Array.isArray(node.properties)) return node.properties.some((property) => {
+		if (!astNode(property)) return false;
+		return property.type === "RestElement"
+			? bindingPatternContainsName(property.argument, name)
+			: property.type === "Property" && bindingPatternContainsName(property.value, name);
+	});
+	return false;
+}
+
+function lexicalDeclarationContainsName(node: unknown, name: string): boolean {
+	if (!astNode(node)) return false;
+	if (node.type === "VariableDeclaration" && node.kind !== "var" && Array.isArray(node.declarations)) {
+		return node.declarations.some((declaration) => astNode(declaration) && bindingPatternContainsName(declaration.id, name));
+	}
+	return (node.type === "FunctionDeclaration" || node.type === "ClassDeclaration") && bindingPatternContainsName(node.id, name);
+}
+
+function scopeShadowsIdentifier(node: AstNode, name: string): boolean {
+	if (node.type === "BlockStatement" && Array.isArray(node.body)) return node.body.some((statement) => lexicalDeclarationContainsName(statement, name));
+	if (node.type === "CatchClause") return bindingPatternContainsName(node.param, name);
+	if (node.type === "ForStatement") return lexicalDeclarationContainsName(node.init, name);
+	if (node.type === "ForInStatement" || node.type === "ForOfStatement") return lexicalDeclarationContainsName(node.left, name);
+	if (node.type === "SwitchStatement" && Array.isArray(node.cases)) {
+		return node.cases.some((entry) => astNode(entry) && Array.isArray(entry.consequent) && entry.consequent.some((statement) => lexicalDeclarationContainsName(statement, name)));
+	}
+	return false;
+}
+
+function walkAstWithoutShadowedIdentifier(node: unknown, name: string, visit: (node: AstNode) => void): void {
+	if (Array.isArray(node)) {
+		for (const item of node) walkAstWithoutShadowedIdentifier(item, name, visit);
+		return;
+	}
+	if (!astNode(node) || scopeShadowsIdentifier(node, name)) return;
+	visit(node);
+	if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression") return;
+	for (const [key, child] of Object.entries(node)) {
+		if (!AST_LOCATION_KEYS.has(key)) walkAstWithoutShadowedIdentifier(child, name, visit);
+	}
+}
+
 function definitelyNonJson(node: AstNode, normalizeUndefined = false): string | undefined {
 	if (node.type === "Literal") {
 		if (typeof node.bigint === "string") return "BigInt values are not JSON-representable";
@@ -1856,11 +1903,11 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 				const args = Array.isArray(declaration.init.argument.arguments) ? declaration.init.argument.arguments : [];
 				const itemCount = astNode(args[0]) && args[0].type === "ArrayExpression" && Array.isArray(args[0].elements) ? args[0].elements.length : 0;
 				const arrayResultShape = Array.from({ length: itemCount });
-				for (const later of workflowBody.body.slice(statementIndex + 1)) walkAst(later, (node) => {
+				for (const later of workflowBody.body.slice(statementIndex + 1)) walkAstWithoutShadowedIdentifier(later, name, (node) => {
 					if (node.type !== "MemberExpression" || !astNode(node.object) || node.object.type !== "Identifier" || node.object.name !== name) return;
 					const property = node.computed === true ? literalString(node.property) : astNode(node.property) && node.property.type === "Identifier" ? node.property.name as string : undefined;
 					if (property && keys.has(property) && !(property in arrayResultShape)) errors.push({ message: `runs.all returns an ordered array; '${name}.${property}' is keyed access. Use an index, destructuring, or map(...).`, ...nodeLocation(node) });
-				}, false);
+				});
 			}
 		}
 	}

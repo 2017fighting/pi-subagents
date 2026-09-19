@@ -6,6 +6,10 @@
 
 - Add `subagents.defaultSubagentOnlyExtensions` for shared child-only extension paths without disabling ambient extension discovery. Thanks to [@Shujakuinkuraudo](https://github.com/Shujakuinkuraudo) for #2284.
 
+### Fixed
+
+- Reject malformed inline and file-backed workflow scripts before async run state or child launches are created, with the same structured diagnostics as `action: "validate"`. Thanks to [@rtbe](https://github.com/rtbe) for #2309.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights
