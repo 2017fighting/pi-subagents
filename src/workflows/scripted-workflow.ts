@@ -384,8 +384,8 @@ function laneStageRecord(stageKey, child, forcedState) {
   const ok = result?.ok === true;
   const verdict = laneStageVerdict(result);
   const blocked = laneStageIsBlocked(result);
-  const state = forcedState ?? (result?.stopped ? "stopped" : result?.detached ? "detached" : ok ? blocked ? "blocked" : "completed" : "failed");
-  const error = state !== "completed"
+  const state = forcedState ?? (result?.state === "running" ? "running" : result?.stopped ? "stopped" : result?.detached ? "detached" : ok ? blocked ? "blocked" : "completed" : "failed");
+  const error = state !== "completed" && state !== "running"
     ? state === "blocked" && blocked
       ? "Stage returned a blocked verdict."
       : typeof result?.error === "string"
@@ -1082,7 +1082,11 @@ parentPort.on("message", async (message) => {
 
 export interface WorkflowScriptChildResult {
 	key: string;
+	/** True only for successfully completed child work, never for a launch receipt. */
 	ok: boolean;
+	/** An explicit async launch returned before a final child result was available. */
+	state?: "running";
+	asyncDir?: string;
 	lane?: import("../shared/types.ts").WorkflowLaneMetadata;
 	terminalOutcome?: import("../shared/types.ts").WorkflowTerminalOutcome;
 	stopped?: boolean;
@@ -1097,6 +1101,8 @@ export interface WorkflowScriptChildResult {
 	requestedContext?: "fresh" | "fork";
 	resolvedContext?: "fresh" | "fork" | "mixed";
 	outputReference?: string;
+	/** A file produced by the child runtime (output or worktree handoff), not its job directory. */
+	outputArtifactPath?: string;
 	recovery?: AcceptanceRecoveryMetadata;
 	outputPathMapping?: { requestedPath: string; savedPath: string };
 	externalAdapter?: import("../shared/types.ts").ExternalCliReceiptMetadata;
@@ -1463,7 +1469,7 @@ function workflowReturnRecoveryHint(children: WorkflowScriptChildResult[]): stri
 		const fields = [child.runId ? `runId=${child.runId.slice(0, 500)}` : undefined, child.outputReference ? `outputReference=${child.outputReference.slice(0, 500)}` : undefined, child.artifactPaths[0] ? `artifact=${child.artifactPaths[0].slice(0, 500)}` : undefined].filter((field): field is string => field !== undefined);
 		return `'${child.key}'${fields.length > 0 ? ` (${fields.join(", ")})` : ""}`;
 	});
-	return ` Child work completed before return serialization failed. Recover outputs from: ${references.join(", ")}${children.length > references.length ? `, and ${children.length - references.length} more` : ""}. Return a plain projection such as { runId: child.runId, ok: child.ok, outputReference: child.outputReference }.`;
+	return ` ${children.some((child) => child.state === "running") ? "Child calls returned before return serialization failed; launch receipts do not prove completion." : "Child work completed before return serialization failed."} Recover outputs from: ${references.join(", ")}${children.length > references.length ? `, and ${children.length - references.length} more` : ""}. Return a plain projection such as { runId: child.runId, ok: child.ok, outputReference: child.outputReference }.`;
 }
 
 export interface SimpleWorkflowRunPreview {
@@ -1926,7 +1932,7 @@ function isZeroUsage(usage: unknown): boolean {
 }
 
 function setupAbortResumeParams(params: Record<string, unknown>, result: WorkflowScriptChildResult, signal: AbortSignal): Record<string, unknown> | undefined {
-	if (signal.aborted || result.ok || result.stopped || result.interrupted || !result.runId) return undefined;
+	if (signal.aborted || result.state === "running" || result.ok || result.stopped || result.interrupted || !result.runId) return undefined;
 	const childResult = Array.isArray(result.results) && result.results.length === 1 && isRecord(result.results[0]) ? result.results[0] : undefined;
 	const error = typeof childResult?.error === "string" ? childResult.error : result.error;
 	if (error !== "This operation was aborted" || !isZeroUsage(childResult?.usage)) return undefined;
@@ -2073,7 +2079,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 		return true;
 	};
 	const notifyChildSettled = (key: string, result: WorkflowScriptChildResult): void => {
-		if (!options.onChildSettled || !options.workflowRunId) return;
+		if (result.state === "running" || !options.onChildSettled || !options.workflowRunId) return;
 		const outcome: WorkflowChildSettledOutcome = result.ok
 			? "completed"
 			: result.stopped
@@ -2081,7 +2087,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				: result.detached
 					? "paused"
 					: "failed";
-		const outputReference = result.outputReference ?? result.artifactPaths[0];
+		const outputReference = result.outputReference ?? result.outputArtifactPath;
 		try {
 			options.onChildSettled({
 				workflowRunId: options.workflowRunId,
@@ -2408,7 +2414,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				: promise.then((result) => {
 					const recoverableAcceptanceMetadata = result.recovery?.status === "available-for-review"
 						&& result.recovery.reason === "acceptance-metadata-rejected";
-					if (!result.ok && !result.stopped && !recoverableAcceptanceMetadata) {
+					if (!result.ok && result.state !== "running" && !result.stopped && !recoverableAcceptanceMetadata) {
 						const childError = new Error(result.detached ? `Run '${key}' detached: ${result.error ?? result.output}` : `Run '${key}' failed: ${result.error ?? result.output}`) as Error & { workflowErrorKind?: "detached-child" };
 						if (result.detached) childError.workflowErrorKind = "detached-child";
 						throw childError;
@@ -2539,7 +2545,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				const reason = childController.signal.reason;
 				return stoppedChildResult(key, reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Workflow script aborted.");
 			}).then((result) => {
-				let normalized = !result.ok && !result.error ? { ...result, error: result.output } : result;
+				let normalized = !result.ok && result.state !== "running" && !result.error ? { ...result, error: result.output } : result;
 				if (resolvedResumeLineage?.length && normalized.runId) {
 					normalized = { ...normalized, continuation: { runIds: [...new Set([...resolvedResumeLineage, normalized.runId])] } };
 				}
@@ -2547,8 +2553,8 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				if (stoppedLaunches.has(key)) return children.get(key) ?? normalized;
 				children.set(key, normalized);
 				recordAcceptanceRecoveryBarrier(key, normalized);
-				const state = normalized.ok ? "completed" : normalized.stopped ? "stopped" : normalized.detached ? "detached" : "failed";
-				trace.push({ operation: "run", key, state, durationMs: Date.now() - startedAt, ...workflowStringMetadata(params), ...(generatedLaneKey ? { generatedLaneKey } : {}), ...(normalized.agent ? { agent: normalized.agent } : {}), ...(normalized.runId ? { runId: normalized.runId } : {}), ...(!normalized.ok ? { error: normalized.error ?? normalized.output } : {}) });
+				const state = normalized.state === "running" ? "started" : normalized.ok ? "completed" : normalized.stopped ? "stopped" : normalized.detached ? "detached" : "failed";
+				trace.push({ operation: "run", key, state, durationMs: Date.now() - startedAt, ...workflowStringMetadata(params), ...(generatedLaneKey ? { generatedLaneKey } : {}), ...(normalized.agent ? { agent: normalized.agent } : {}), ...(normalized.runId ? { runId: normalized.runId } : {}), ...(!normalized.ok && normalized.state !== "running" ? { error: normalized.error ?? normalized.output } : {}) });
 				traceChanged();
 				notifyChildSettled(key, normalized);
 				return normalized;

@@ -11,6 +11,10 @@
 
 - Prevent publishing the TypeScript source checkout directly to npm; only the compiled `dist-pkg` artifact is publishable. Thanks to [@niko-operal](https://github.com/niko-operal) for #2300.
 
+### Fixed
+
+- Keep explicitly detached workflow children visible as running work, preserve their result lookup after the coordinator exits, and avoid reporting launch receipts as completed results. Thanks to [@shaharmor](https://github.com/shaharmor) for #2299.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights

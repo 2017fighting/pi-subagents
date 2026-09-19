@@ -397,7 +397,7 @@ export interface ControlEvent {
 	taskPreview?: string;
 }
 
-export type SubagentResultStatus = "completed" | "failed" | "paused" | "stopped" | "detached";
+export type SubagentResultStatus = "running" | "completed" | "failed" | "paused" | "stopped" | "detached";
 export type SubagentOutputState = "present" | "absent" | "unknown";
 export type SubagentRunMode = "single" | "parallel" | "chain" | "workflow";
 export type SubagentResultMode = SubagentRunMode;
@@ -2275,6 +2275,8 @@ export interface SubagentState {
 	liveAsyncSessionRoots?: Map<string, string>;
 	/** Foreground nested routes retained after their direct parent settles, keyed by root run id. */
 	retainedForegroundNestedRoutes?: Map<string, NestedRouteInfo>;
+	/** Lookup authority outlives live controls, but never crosses the owning session. */
+	retainedNestedLookupRoutes?: { sessionId: string; routes: Map<string, NestedRouteInfo> };
 	/** Last valid parent session model observed for this session; used when continuation contexts omit ctx.model. */
 	lastParentModel?: { provider: string; id: string };
 	subagentInProgress?: boolean;

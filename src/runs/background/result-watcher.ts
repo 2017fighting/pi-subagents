@@ -483,7 +483,7 @@ export function createResultWatcher(
 					: output;
 				const sessionPath = result.sessionFile ?? (resultChildren.length === 1 ? data.sessionFile : undefined);
 				const childNestedChildren = sanitizeNestedResultChildren(result.children, resultPath, `results[${index}].children`);
-				const childState = result.state === "paused" || result.state === "stopped"
+				const childState = result.state === "running" || result.state === "queued" || result.state === "paused" || result.state === "stopped"
 					? result.state
 					: result.stopped === true
 						? "stopped"

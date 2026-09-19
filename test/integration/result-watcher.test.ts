@@ -70,6 +70,31 @@ async function waitForPredicate(predicate: () => boolean, timeoutMs = 2_500): Pr
 }
 
 describe("result watcher", () => {
+	it("keeps running workflow launch receipts nonterminal in notifications and completion events", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-dispatch-"));
+		const state = createState();
+		state.currentSessionId = "session-1";
+		const delivered: unknown[] = [], completed: unknown[] = [];
+		const watcher = createResultWatcher({ events: { on: () => () => {}, emit(event, value) { if (event === SUBAGENT_ASYNC_COMPLETE_EVENT) completed.push(value); } } }, state, resultsDir, 60_000, {
+			notifier: { async deliver(value) { delivered.push(value); return true; } },
+		});
+		try {
+			watcher.startResultWatcher();
+			writeIndexedResult(path.join(resultsDir, "dispatch.json"), { id: "dispatch", runId: "dispatch", mode: "workflow", state: "complete", success: true, sessionId: "session-1",
+				results: [{ workflowKey: "child", runId: "child-run", state: "running", output: "", outputState: "absent" }],
+			});
+			assert.equal(await waitForPredicate(() => completed.length === 1), true);
+			for (const value of [...delivered, ...completed]) {
+				assert.equal(value.results[0].status, "running");
+				assert.equal(value.results[0].success, undefined);
+				assert.equal(value.results[0].outputState, "absent");
+				assert.equal(value.results[0].artifactPath, undefined);
+			}
+		} finally {
+			watcher.stopResultWatcher();
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
 	it("does not create Darwin native watchers or idle timers", () => {
 		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-darwin-idle-"));
 		try {

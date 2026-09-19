@@ -613,6 +613,18 @@ export interface NestedRunMatch {
 	run: NestedRunSummary;
 }
 
+export function retainNestedLookupRoute(
+	state: Pick<SubagentState, "currentSessionId" | "retainedNestedLookupRoutes">,
+	route: NestedRouteInfo | undefined,
+	sessionId: string | undefined,
+): void {
+	if (!route || !sessionId || sessionId !== state.currentSessionId) return;
+	if (state.retainedNestedLookupRoutes?.sessionId !== sessionId) {
+		state.retainedNestedLookupRoutes = { sessionId, routes: new Map() };
+	}
+	state.retainedNestedLookupRoutes.routes.set(route.rootRunId, route);
+}
+
 export interface NestedRunResolutionScope {
 	routes: NestedRoute[];
 	descendantOf?: { parentRunId: string; parentStepIndex?: number };

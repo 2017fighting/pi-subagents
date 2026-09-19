@@ -51,6 +51,10 @@ Workflow-level child controls default onto each `runs.run`/`runs.all` launch; ex
 
 Child results cross into the script as plain JSON data. Non-JSON host metadata is omitted, so use returned fields such as `runId`, `ok`, `output`, and `structuredOutput` for workflow control.
 
+Omitting a child's `async` preserves awaited final-result semantics, even if the child runs in the background. Explicit child `async: true` intentionally returns after launch: its receipt has `state: "running"`, `ok: false`, an empty `output`, and no completion error or final `outputReference`. `ok` confirms successful child completion, not successful dispatch. Use `runId` and `asyncDir` to inspect the running child; `artifactPaths` may include runtime directories and is not a list of final reports. Reusing the same workflow key returns the same receipt, not a refreshed result.
+
+A workflow can finish dispatch while these children remain running. Its summary and child rows identify that distinction, and launch receipts do not generate child-completion notices. Consume the later child result before treating its work or report as complete.
+
 Validate a script without launching children:
 
 ```js
@@ -292,7 +296,7 @@ subagent({ workflowScript: `
 ` });
 ```
 
-The workflow trace records the run completions and steering receipt. Scripts still never see raw async directories, inbox paths, or session files. If the keyed child is terminal, stale, or has no live route when `runs.steer` runs, the receipt reports `missed` or `failed` and the script can decide whether to continue.
+The workflow trace records the run completions and steering receipt. Scripts cannot access the filesystem or control inboxes; returned run and artifact references are data only. If the keyed child is terminal, stale, or has no live route when `runs.steer` runs, the receipt reports `missed` or `failed` and the script can decide whether to continue.
 
 Use named outputs when later workflow steps need structured data or durable references:
 
@@ -521,7 +525,7 @@ If messages do not show up, run `/subagents-doctor`. Advanced users can tune the
 
 Subagents can call `subagent` only when their resolved builtin tools explicitly include `subagent`. That is meant for delegated fanout agents, not ordinary worker/reviewer children. A depth guard prevents unbounded nesting.
 
-By default, nesting is limited to two levels: main session → subagent → sub-subagent. Deeper calls are blocked with guidance to complete the current task directly. Nested runs appear in the parent status widget and `status` output as a tree, and `status`, `interrupt`, and `resume` can target a nested run by its id.
+By default, nesting is limited to two levels: main session → subagent → sub-subagent. Deeper calls are blocked with guidance to complete the current task directly. Nested runs appear in the parent status widget and `status` output as a tree, and `status`, `interrupt`, and `resume` can target a nested run by its id. Coordinator completion and widget cleanup retain descendant lookup authority in the owning parent session; they do not grant access to another session or outside a child's authorized subtree.
 
 Configure the limit with:
 

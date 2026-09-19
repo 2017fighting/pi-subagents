@@ -20,6 +20,16 @@ it("projects independent bounded snapshots by stable key and clears terminal act
 	assert.ok(workflowChildSummary({ ...input, inventoryComplete: true, workflowState: "failed", progress: snapshots }).children.every((row) => row.activity === undefined));
 });
 
+it("keeps launch receipts running when the workflow inventory closes successfully or with an error", () => {
+	for (const workflowState of ["completed", "failed", "stopped"] as const) {
+		const summary = workflowChildSummary({ ...input, workflowState, inventoryComplete: true,
+			children: [{ key: "a", state: "running", ok: false, runId: "child-a", output: "", artifactPaths: [] }],
+		});
+		assert.equal(summary.children.find((row) => row.childId === "a")?.state, "running");
+		assert.equal(summary.children.find((row) => row.childId === "b")?.state, workflowState === "stopped" ? "stopped" : "failed");
+	}
+});
+
 it("bounds UTF-8 and JSON bytes and rejects malformed activity strictly", () => {
 	assert.equal(workflowChildActivity({ currentTool: "界".repeat(86) }).currentTool, undefined);
 	assert.equal(workflowChildActivity({ currentTool: "界".repeat(85) }).currentTool?.length, 85);

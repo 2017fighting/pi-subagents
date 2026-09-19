@@ -1506,6 +1506,8 @@ describe("async run status inspection", () => {
 			const asyncRoot = path.join(root, "runs");
 			fs.mkdirSync(path.join(asyncRoot, "run-aaaa-one"), { recursive: true });
 			fs.mkdirSync(path.join(asyncRoot, "run-aaaa-two"), { recursive: true });
+			fs.writeFileSync(path.join(asyncRoot, "run-aaaa-one", "status.json"), "{}");
+			fs.writeFileSync(path.join(asyncRoot, "run-aaaa-two", "status.json"), "{}");
 
 			const result = inspectSubagentStatus({ id: "run-aaaa" }, {
 				asyncDirRoot: asyncRoot,

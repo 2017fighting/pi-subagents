@@ -1888,7 +1888,9 @@ Answer only from the supplied synthetic text.
 			await new Promise((resolve) => setTimeout(resolve, 20));
 		}
 		assert.equal(workflowResult.state, "complete");
-		assert.match(workflowResult.results?.[0]?.output ?? "", /Async: external/);
+		assert.equal(workflowResult.results?.[0]?.state, "running");
+		assert.equal(workflowResult.results?.[0]?.output, "");
+		assert.equal(workflowResult.results?.[0]?.success, undefined);
 		assert.equal(await waitForFileContent(markerPath, "started"), "started");
 		assert.equal(mockPi.callCount(), 0);
 

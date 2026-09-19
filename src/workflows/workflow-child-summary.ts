@@ -61,6 +61,7 @@ export function workflowChildSummary(input: {
 	progress?: ReadonlyMap<string, WorkflowChildLiveProgress>;
 }): WorkflowChildSummary {
 	const rows = new Map<string, WorkflowChildSummary["children"][number]>();
+	const runningAsyncKeys = new Set(input.children?.filter((child) => child.state === "running").map((child) => child.key));
 	for (const entry of input.trace ?? []) {
 		if (entry.operation !== "run" || !KEY_PATTERN.test(entry.key)) continue;
 		const previous = rows.get(entry.key);
@@ -82,6 +83,7 @@ export function workflowChildSummary(input: {
 	for (const step of input.steps ?? []) {
 		const key = step.workflowKey;
 		if (!key || !KEY_PATTERN.test(key)) continue;
+		if (step.async && step.runId && step.status === "running") runningAsyncKeys.add(key);
 		const state = step.status === "complete" || step.status === "completed" ? "completed"
 			: step.status === "failed" ? "failed"
 				: step.status === "paused" ? "paused"
@@ -102,7 +104,7 @@ export function workflowChildSummary(input: {
 	for (const child of input.children ?? []) {
 		if (!KEY_PATTERN.test(child.key)) continue;
 		const result = Array.isArray(child.results) ? child.results.find((value) => value && typeof value === "object") as Record<string, unknown> | undefined : undefined;
-		const state = child.detached ? "detached" : child.stopped ? "stopped" : child.interrupted ? "paused" : child.ok ? "completed" : result?.acceptance && typeof result.acceptance === "object" && (result.acceptance as { status?: unknown }).status === "rejected" ? "rejected" : "failed";
+		const state = child.state === "running" ? "running" : child.detached ? "detached" : child.stopped ? "stopped" : child.interrupted ? "paused" : child.ok ? "completed" : result?.acceptance && typeof result.acceptance === "object" && (result.acceptance as { status?: unknown }).status === "rejected" ? "rejected" : "failed";
 		rows.set(child.key, {
 			childId: child.key,
 			state,
@@ -115,7 +117,7 @@ export function workflowChildSummary(input: {
 	}
 	if (input.inventoryComplete) {
 		for (const [key, row] of rows) {
-			if (!TERMINAL_STATES.has(row.state)) rows.set(key, { ...row, state: input.workflowState === "stopped" ? "stopped" : "failed" });
+			if (!TERMINAL_STATES.has(row.state) && !runningAsyncKeys.has(key)) rows.set(key, { ...row, state: input.workflowState === "stopped" ? "stopped" : "failed" });
 		}
 	}
 	for (const [key, progress] of input.progress ?? []) {

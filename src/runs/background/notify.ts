@@ -210,7 +210,7 @@ function formatRetainedPathError(label: string, error: RetainedPathError): strin
 function childStatus(child: CompletionChild, workflowState?: string): string {
 	const knownStatus = child.status === "complete"
 		? "completed"
-		: child.status === "completed" || child.status === "failed" || child.status === "paused" || child.status === "stopped" || child.status === "detached"
+		: child.status === "running" || child.status === "completed" || child.status === "failed" || child.status === "paused" || child.status === "stopped" || child.status === "detached"
 			? child.status
 		: undefined;
 	if (knownStatus) return knownStatus;
@@ -564,8 +564,11 @@ export function buildCompletionDetails(result: CompletionNotification): Subagent
 		|| summary.startsWith("Paused after interrupt.")
 	);
 	const status = stopped ? "stopped" : paused ? "paused" : result.success ? "completed" : "failed";
-	const taskInfo =
-		result.taskIndex !== undefined && result.totalTasks !== undefined
+	const runningChildren = (result.mode === "workflow" || agent === "workflow")
+		? result.results?.filter((child) => childStatus(child) === "running").length ?? 0 : 0;
+	const taskInfo = runningChildren > 0
+		? ` (${status === "completed" ? "dispatch complete; " : ""}${runningChildren} children running or uncollected)`
+		: result.taskIndex !== undefined && result.totalTasks !== undefined
 			? ` (${result.taskIndex + 1}/${result.totalTasks})`
 			: undefined;
 
