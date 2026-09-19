@@ -319,6 +319,78 @@ describe("native supervisor channel", () => {
 		assert.deepEqual(sent.map((message) => message.details?.id), [requestId]);
 	});
 
+	it("keeps Windows polling alive when a supervisor directory scan returns UNKNOWN", () => {
+		const currentSessionId = `session-${randomUUID()}`;
+		const runId = `run-${randomUUID()}`;
+		const sent: Array<{ details?: { id?: string } }> = [];
+		let tick: (() => void) | undefined;
+		const ctx = {
+			cwd: process.cwd(), hasUI: false,
+			sessionManager: { getSessionId: () => currentSessionId, getSessionFile: () => null, getEntries: () => [] },
+		};
+		const channel = createNativeSupervisorChannel({
+			getAllTools: () => [], registerTool: () => {},
+			sendMessage: (message: { details?: { id?: string } }) => { sent.push(message); },
+			getSessionName: () => "shared-name",
+		} as never, makeState(currentSessionId, ctx), {
+			platform: "win32",
+			timers: {
+				setInterval: ((callback: () => void) => { tick = callback; return 1; }) as never,
+				clearInterval: (() => { tick = undefined; }) as never,
+				setImmediate, clearImmediate,
+			},
+		});
+		const readdir = fsDefault.readdirSync;
+
+		try {
+			channel.start();
+			assert.equal(typeof tick, "function");
+			let injectUnknown = true;
+			fsDefault.readdirSync = ((dir: fs.PathLike, options?: unknown) => {
+				if (injectUnknown) {
+					injectUnknown = false;
+					throw Object.assign(new Error("directory disappeared"), { code: "UNKNOWN" });
+				}
+				return (readdir as (dir: fs.PathLike, options?: unknown) => unknown)(dir, options);
+			}) as typeof fsDefault.readdirSync;
+			syncBuiltinESMExports();
+
+			assert.doesNotThrow(() => tick!());
+			const requestId = writeRequest({ sessionId: currentSessionId, runId });
+			tick!();
+			assert.deepEqual(sent.map((message) => message.details?.id), [requestId]);
+		} finally {
+			channel.dispose();
+			fsDefault.readdirSync = readdir;
+			syncBuiltinESMExports();
+		}
+	});
+
+	it("does not classify UNKNOWN as a missing supervisor directory off Windows", () => {
+		const currentSessionId = `session-${randomUUID()}`;
+		const ctx = { sessionManager: { getSessionId: () => currentSessionId } };
+		const channel = createNativeSupervisorChannel({
+			getAllTools: () => [], registerTool: () => {}, sendMessage: () => {},
+		} as never, makeState(currentSessionId, ctx), { platform: "linux" });
+		const readdir = fsDefault.readdirSync;
+
+		try {
+			fsDefault.readdirSync = (() => {
+				throw Object.assign(new Error("unexpected scan failure"), { code: "UNKNOWN" });
+			}) as typeof fsDefault.readdirSync;
+			syncBuiltinESMExports();
+
+			assert.throws(
+				() => channel.findPendingAsks({ runId: "run", agent: "worker", childIndex: 0 }),
+				(error: NodeJS.ErrnoException) => error.code === "UNKNOWN",
+			);
+		} finally {
+			channel.dispose();
+			fsDefault.readdirSync = readdir;
+			syncBuiltinESMExports();
+		}
+	});
+
 	it("registers idle Darwin sessions without native watchers or polling", () => {
 		const currentSessionId = `session-${randomUUID()}`;
 		const ctx = {

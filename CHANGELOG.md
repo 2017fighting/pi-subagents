@@ -23,6 +23,10 @@
 
 - Reject malformed inline and file-backed workflow scripts before async run state or child launches are created, with the same structured diagnostics as `action: "validate"`. Thanks to [@rtbe](https://github.com/rtbe) for #2309.
 
+### Fixed
+
+- Treat Windows `UNKNOWN` errors while scanning supervisor channel directories as transient when those temporary directories disappear, so polling keeps running and can recover. Thanks to [@asher-aqi](https://github.com/asher-aqi) for #2303.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights
