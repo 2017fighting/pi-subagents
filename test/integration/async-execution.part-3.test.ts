@@ -1440,6 +1440,83 @@ export default function() {
 		}
 	});
 
+	it("publishes each revival startup control on its distinct public file", { timeout: 40_000, skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
+		const agents = [makeAgent("worker", { completionGuard: false })];
+		const parentSessionFile = path.join(tempDir, "startup-control-parent.jsonl");
+		const sessionFile = path.join(tempDir, "startup-control-child.jsonl");
+		const header = JSON.stringify({ type: "session", version: 1, id: "startup-control", cwd: fs.realpathSync(tempDir) });
+		fs.writeFileSync(parentSessionFile, `${header}\n`);
+		fs.writeFileSync(sessionFile, `${header}\n`);
+		const ctx = {
+			...makeMinimalCtx(tempDir),
+			sessionManager: {
+				getSessionId: () => "startup-control-session",
+				getSessionFile: () => parentSessionFile,
+				getLeafId: () => "leaf",
+				openSession: () => ({ createBranchedSession: () => sessionFile }),
+			},
+		};
+		mockPi.onCall({ output: "Initial work" });
+		const executor = makeAsyncExecutor(agents);
+		const launch = await executor.execute(
+			"startup-control-launch", { agent: "worker", task: "Do work", async: true, context: "fork", acceptance: false },
+			new AbortController().signal, undefined, ctx,
+		) as AsyncExecutionResult;
+		assert.ok(!launch.isError, launch.content[0]?.text);
+		assert.ok(launch.details.asyncId);
+		await readAsyncPayload(launch.details.asyncId);
+
+		const observedControls = path.join(tempDir, "observed-startup-controls.jsonl");
+		const preloadFile = path.join(tempDir, "observe-startup-controls.mjs");
+		fs.writeFileSync(preloadFile, `
+import { createRequire, syncBuiltinESMExports } from "node:module";
+const require = createRequire(import.meta.url);
+const fs = require("node:fs");
+const originalReadFileSync = fs.readFileSync;
+const observed = new Set();
+fs.readFileSync = function(filePath) {
+	const value = originalReadFileSync.apply(this, arguments);
+	const match = String(filePath).match(/runner-startup-(ack|confirm|proceed)\\.json$/);
+	if (match && typeof value === "string") {
+		try {
+			const payload = JSON.parse(value);
+			const event = JSON.stringify({ file: match[1], action: payload.action });
+			if (!observed.has(event)) {
+				observed.add(event);
+				fs.appendFileSync(${JSON.stringify(observedControls)}, event + "\\n");
+			}
+		} catch {}
+	}
+	return value;
+};
+syncBuiltinESMExports();
+`);
+		mockPi.onCall({ output: "Continued work" });
+		const previousNodeOptions = process.env.NODE_OPTIONS;
+		let resumed: AsyncExecutionResult;
+		try {
+			process.env.NODE_OPTIONS = [previousNodeOptions, `--import=${pathToFileURL(preloadFile).href}`].filter(Boolean).join(" ");
+			resumed = await executor.execute(
+				"startup-control-resume", { action: "resume", id: launch.details.asyncId, message: "Continue", acceptance: false },
+				new AbortController().signal, undefined, ctx,
+			) as AsyncExecutionResult;
+		} finally {
+			if (previousNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+			else process.env.NODE_OPTIONS = previousNodeOptions;
+		}
+		assert.ok(!resumed.isError, resumed.content[0]?.text);
+		assert.ok(resumed.details.asyncId);
+		assert.equal((await readAsyncPayload(resumed.details.asyncId)).success, true);
+		assert.deepEqual(
+			fs.readFileSync(observedControls, "utf8").trim().split("\n").map((line) => JSON.parse(line)),
+			[
+				{ file: "ack", action: "ack" },
+				{ file: "confirm", action: "confirm" },
+				{ file: "proceed", action: "proceed" },
+			],
+		);
+	});
+
 	it("aligns initial and resumed background forked sessions with an explicit child cwd", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Forked async work" });
 		const parentCwd = fs.realpathSync(tempDir);

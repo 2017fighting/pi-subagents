@@ -14,7 +14,7 @@ export default function injectStartupFailure(pi: ExtensionAPI) {
 		const hook: typeof fs.renameSync = (from, to) => {
 			const target = String(to);
 			const asyncDir = path.dirname(target);
-			if (mode === "revival" && /\/runner-startup-(?:ack|proceed)\.json$/.test(target) && fs.existsSync(path.join(asyncDir, "runner-startup.json"))) {
+			if (mode === "revival" && /\/runner-startup-(?:ack|confirm|proceed)\.json$/.test(target) && fs.existsSync(path.join(asyncDir, "runner-startup.json"))) {
 				const control = JSON.parse(fs.readFileSync(from, "utf8"));
 				const startup = JSON.parse(fs.readFileSync(path.join(asyncDir, "runner-startup.json"), "utf8"));
 				const events = fs.readFileSync("/stage/lifecycle.jsonl", "utf8").trim().split("\n").map((line) => JSON.parse(line));

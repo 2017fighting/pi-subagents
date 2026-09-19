@@ -31,6 +31,10 @@
 
 - Keep inline Fleet workflow coverage stable across heartbeat, counter, and token-window updates while revoking it for structural row changes, without resetting the adaptive widget layout for unchanged coverage. Thanks to [@swarajban](https://github.com/swarajban) for #2305.
 
+### Fixed
+
+- Keep retained-session startup acknowledgement and confirmation in separate atomic control files, so concurrent workflow observers cannot overwrite the confirmation and strand resumed children at the startup barrier. Thanks to [@luigiplr](https://github.com/luigiplr) for #2292.
+
 ## [0.69.0] - 2026-09-18
 
 ### Highlights
