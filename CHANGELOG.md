@@ -2,33 +2,46 @@
 
 ## [Unreleased]
 
+## [0.70.0] - 2026-09-19
+
+### Highlights
+
+- Control which extensions children load and which agents descendants may launch without widening their permissions.
+- Background workflows remain visible and recoverable through detaches, interruptions, restarts, and supervisor handoffs.
+- Invalid workflows, unsafe worktree launches, and blocked tool budgets now fail earlier with clearer results.
+- Linked worktrees, Windows supervisor polling, source-layout runners, and Orca progress tabs are more reliable.
+
 ### Added
 
-- Add `subagents.defaultSubagentOnlyExtensions` for shared child-only extension paths without disabling ambient extension discovery. Thanks to [@Shujakuinkuraudo](https://github.com/Shujakuinkuraudo) for #2284.
-- Let agent frontmatter and `subagents.agentOverrides.<name>.allowedAgents` narrow which canonical agents a child may launch, without granting nested delegation or widening inherited capability ceilings. Thanks to [@shkrabov](https://github.com/shkrabov) for #2312.
+- Add `subagents.defaultSubagentOnlyExtensions` for loading shared child-only extensions without disabling ambient extension discovery. Thanks to [@Shujakuinkuraudo](https://github.com/Shujakuinkuraudo) for #2284.
+- Allow agent frontmatter and `subagents.agentOverrides.<name>.allowedAgents` to restrict which canonical agents a child may launch without granting delegation or widening capability ceilings. Thanks to [@shkrabov](https://github.com/shkrabov) for #2312.
+
+### Changed
+
+- Document `/subagent-cost` as the combined accounting view for parent and asynchronous child usage. Thanks to [@swarajban](https://github.com/swarajban) for #2313.
 
 ### Fixed
 
 - Wake root `bg_wait` calls when an owned nested child is waiting on `contact_supervisor`. Thanks to [@geril07](https://github.com/geril07) for #2344.
-- Prevent publishing the TypeScript source checkout directly to npm; only the compiled `dist-pkg` artifact is publishable. Thanks to [@niko-operal](https://github.com/niko-operal) for #2300.
-- Keep explicitly detached workflow children visible as running work, preserve their result lookup after the coordinator exits, and avoid reporting launch receipts as completed results. Thanks to [@shaharmor](https://github.com/shaharmor) for #2299.
-- Reject direct async managed-worktree launches from a dirty source before returning a receipt or creating provisional run state. Thanks to [@rtbe](https://github.com/rtbe) for #2311.
-- Reject malformed inline and file-backed workflow scripts before async run state or child launches are created, with the same structured diagnostics as `action: "validate"`. Thanks to [@rtbe](https://github.com/rtbe) for #2309.
-- Treat Windows `UNKNOWN` errors while scanning supervisor channel directories as transient when those temporary directories disappear, so polling keeps running and can recover. Thanks to [@asher-aqi](https://github.com/asher-aqi) for #2303.
-- Keep inline Fleet workflow coverage stable across heartbeat, counter, and token-window updates while revoking it for structural row changes, without resetting the adaptive widget layout for unchanged coverage. Thanks to [@swarajban](https://github.com/swarajban) for #2305.
-- Keep retained-session startup acknowledgement and confirmation in separate atomic control files, so concurrent workflow observers cannot overwrite the confirmation and strand resumed children at the startup barrier. Thanks to [@luigiplr](https://github.com/luigiplr) for #2292.
-- Report actionable, rooted field paths for the selected branch of failed structured-output `if`/`then`/`else` schemas while preserving root `$defs`. Thanks to [@peedrr](https://github.com/peedrr) for #2317.
-- Settle interrupted, stopped, or timed-out background runs even when child session creation hangs, and contain disposal failures if creation completes after settlement. Thanks to [@onorua](https://github.com/onorua) for #2320.
-- Reconcile native foreground and background child usage from terminal child-session messages when live events are missing or partial. Thanks to [@riique](https://github.com/riique) for #2295 and #2296.
-- Keep project-scoped agent memory stable across standard linked Git worktrees. Thanks to [@freezscholte](https://github.com/freezscholte) for #2293.
-- Indexed workflow status transcripts now follow async workflow steps to their child-owned transcript tail. Thanks to [@swarajban](https://github.com/swarajban) for #2304.
-- Stop independent root sessions from publishing or restoring a shared permission-forwarding identity. Detached runners now receive only their validated launch parent, while environment-only forwarding from in-process foreground children remains unsupported pending a session-scoped permission-extension API. Thanks to [@kasumikira](https://github.com/kasumikira) for #2321.
-- Give the bundled reviewer a bounded, read-only view of the staged and unstaged working-tree delta against its launch `HEAD`, plus untracked paths, without restoring shell access. Committed ranges still require a supplied diff artifact. Thanks to [@nateberkopec](https://github.com/nateberkopec) for #2306.
-- Document `/subagent-cost` as the supported combined accounting view because Pi's custom completion messages cannot add async child usage to built-in session totals. Thanks to [@swarajban](https://github.com/swarajban) for #2313.
-- A parent session's own `--tools` allowlist no longer limits which tools its children may hold. Pi filters a session's tool registry by that allowlist, so predicting a child's tools from the parent read a narrow dispatcher session as a runtime without `read`, `bash`, or `grep`, stripped those tools from every child, and compounded at each hop. Children are separate sessions that build their own tools, so the prediction is gone: a child now launches with the tools its agent declares and fails on its own registry, before its first model call, when one is genuinely missing. Thanks to [@carlesba](https://github.com/carlesba) for #2289.
-- Keep source-layout async runners on native Node TypeScript when child extensions are configured, while short-circuiting host peer aliases so Pi's extension loader and generated factories resolve the same filesystem targets. Thanks to [@qsgy-edge](https://github.com/qsgy-edge) for #2314.
-- Orca progress tabs no longer break under `fish`. The viewer one-liner no longer relies on backslashes, which fish collapses inside single quotes, so tabs mirror progress again instead of opening on a `node -e` `SyntaxError`. Thanks to [@yourfriendaaron](https://github.com/yourfriendaaron) for #2294.
+- Keep explicitly detached workflow children visible, preserve their result lookup after the coordinator exits, and avoid treating launch receipts as completed results. Thanks to [@shaharmor](https://github.com/shaharmor) for #2299.
+- Settle interrupted, stopped, or timed-out background runs even when child session creation hangs. Thanks to [@onorua](https://github.com/onorua) for #2320.
+- Prevent concurrent workflow observers from overwriting retained-session startup confirmation and stranding resumed children. Thanks to [@luigiplr](https://github.com/luigiplr) for #2292.
+- Let children use the tools declared by their own agent configuration instead of incorrectly narrowing them to the parent's `--tools` selection. Thanks to [@carlesba](https://github.com/carlesba) for #2289.
+- Report foreground hard tool-budget blocks as `tool_budget_exhausted`, including calls blocked before execution starts. Thanks to [@kylerberry](https://github.com/kylerberry) for #2302.
+- Keep permission forwarding scoped to the validated launch parent instead of sharing an identity between independent root sessions. Thanks to [@kasumikira](https://github.com/kasumikira) for #2321.
+- Reject malformed inline and file-backed workflow scripts before creating asynchronous run state or launching children. Thanks to [@rtbe](https://github.com/rtbe) for #2309.
+- Reject direct asynchronous managed-worktree launches from a dirty source before creating run state or returning a receipt. Thanks to [@rtbe](https://github.com/rtbe) for #2311.
 - Avoid rejecting keyed property access after a mutable `runs.all(...)` result binding is reassigned.
+- Report useful rooted field paths for failed structured-output `if`/`then`/`else` schemas while preserving root `$defs`. Thanks to [@peedrr](https://github.com/peedrr) for #2317.
+- Give the bundled reviewer a bounded, read-only view of staged, unstaged, and untracked working-tree changes from its launch `HEAD`. Thanks to [@nateberkopec](https://github.com/nateberkopec) for #2306.
+- Show the correct child transcript when inspecting an indexed asynchronous workflow step. Thanks to [@swarajban](https://github.com/swarajban) for #2304.
+- Reconcile foreground and background child usage from terminal session messages when live usage events are missing or incomplete. Thanks to [@riique](https://github.com/riique) for #2295 and #2296.
+- Keep project-scoped agent memory stable across linked Git worktrees. Thanks to [@freezscholte](https://github.com/freezscholte) for #2293.
+- Keep Fleet workflow coverage stable during heartbeat, counter, and token updates without resetting an unchanged layout. Thanks to [@swarajban](https://github.com/swarajban) for #2305.
+- Continue supervisor polling on Windows when a temporary channel directory disappears during a scan. Thanks to [@asher-aqi](https://github.com/asher-aqi) for #2303.
+- Keep source-layout asynchronous runners on native Node TypeScript when child extensions are configured, with consistent peer-module resolution. Thanks to [@qsgy-edge](https://github.com/qsgy-edge) for #2314.
+- Make Orca progress tabs work under `fish`. Thanks to [@yourfriendaaron](https://github.com/yourfriendaaron) for #2294.
+- Prevent publishing the TypeScript source checkout directly to npm; only the compiled package is publishable. Thanks to [@niko-operal](https://github.com/niko-operal) for #2300.
 
 ## [0.69.0] - 2026-09-18
 
