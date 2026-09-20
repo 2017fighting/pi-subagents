@@ -1,7 +1,7 @@
 import { Agent, type AgentTool, type StreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { createReadOnlyTools, convertToLlm, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
-import type { Model, ProviderHeaders } from "@earendil-works/pi-ai";
+import { createInitialSystemMessage, toToolDeclaration, type Model, type ProviderHeaders } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { resolveModelCandidate } from "../runs/shared/model-resolution.ts";
 import { agentStreamOptions } from "../shared/agent-stream-options.ts";
@@ -218,11 +218,15 @@ function createWatchdogWarnTool(request: WatchdogReviewRequest): AgentTool<typeo
 	};
 }
 
+export function formatWatchdogCwdSection(cwd: string): string {
+	if (/[\p{Cc}\p{Zl}\p{Zp}<>]/u.test(cwd)) throw new Error("Watchdog cwd cannot contain control, line-separator, or angle-bracket characters.");
+	return `<cwd>\n${cwd}\n</cwd>`;
+}
+
 export function buildWatchdogSystemPrompt(ctx: Pick<ExtensionContext, "cwd">, options: { hasScope?: boolean; guidance?: string; hasDiff?: boolean } = {}): string {
 	const guidance = options.guidance?.trim();
 	return [
 		"You are the main-session subagent watchdog for Pi.",
-		`Working directory: ${ctx.cwd}`,
 		"Review only the supplied parent turn delta. Inspect repository files only when needed to verify a concrete concern.",
 		options.hasScope ? "Use the Current scope record alongside supplied activity evidence; an unrelated user question does not cancel older authorized work." : undefined,
 		`You are read-only. You may use ${options.hasDiff ? "read, grep, find, ls, and watchdog_diff (the full repo diff since the session baseline; pass a path to narrow it)" : "read, grep, find, and ls"}. Do not edit files, run shell commands, spawn agents, or mutate state.`,
@@ -232,6 +236,7 @@ export function buildWatchdogSystemPrompt(ctx: Pick<ExtensionContext, "cwd">, op
 		"If the turn is clean, call no tools and end normally.",
 		"Use severity='blocker' only when the issue should stop acceptance until addressed; otherwise use severity='concern'.",
 		guidance ? `\nStanding instructions from WATCHDOG.md (project first, then user):\n${guidance}` : undefined,
+		`\n${formatWatchdogCwdSection(ctx.cwd)}`,
 	].filter((line): line is string => Boolean(line)).join("\n");
 }
 
@@ -321,13 +326,14 @@ async function runWatchdogAttempt(ctx: ExtensionContext, request: WatchdogReview
 			return { content: [{ type: "text", text: "Review yielded for clarification." }], details: {} };
 		},
 	});
+	const systemPrompt = buildWatchdogSystemPrompt(ctx, {
+		hasScope: request.hasScope,
+		guidance: loadWatchdogGuidance(ctx.cwd, request.config.guidance.watchdogMd),
+		hasDiff: diffBaseline !== undefined,
+	});
 	const agent = new Agent({
 		initialState: {
-			systemPrompt: buildWatchdogSystemPrompt(ctx, {
-				hasScope: request.hasScope,
-				guidance: loadWatchdogGuidance(ctx.cwd, request.config.guidance.watchdogMd),
-				hasDiff: diffBaseline !== undefined,
-			}),
+			messages: [createInitialSystemMessage(systemPrompt, tools.map(toToolDeclaration))!],
 			model: selection.model,
 			thinkingLevel: selection.thinkingLevel,
 			tools,
