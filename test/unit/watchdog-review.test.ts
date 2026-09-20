@@ -10,10 +10,12 @@ import {
 	createAssistantMessageEventStream,
 	fauxAssistantMessage,
 	fauxToolCall,
+	getCurrentSystemPrompt,
+	getCurrentTools,
 	type AssistantMessage,
-	type Context,
 	type Model,
 	type SimpleStreamOptions,
+	type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { DEFAULT_WATCHDOG_CONFIG } from "../../src/watchdog/settings.ts";
 import { createMainWatchdogReview, resolveWatchdogReviewModel } from "../../src/watchdog/review.ts";
@@ -98,7 +100,7 @@ function responseStream(message: AssistantMessage) {
 }
 
 function createStreamFn(responses: AssistantMessage[]) {
-	const calls: Array<{ model: Model<any>; context: Context; options?: SimpleStreamOptions }> = [];
+	const calls: Array<{ model: Model<any>; context: TranscriptContext; options?: SimpleStreamOptions }> = [];
 	const streamFn: StreamFn = (nextModel, context, options) => {
 		calls.push({ model: nextModel, context, options });
 		return responseStream(responses.shift() ?? fauxAssistantMessage("done", { stopReason: "stop" }));
@@ -285,7 +287,7 @@ describe("main watchdog review adapter", () => {
 			const { streamFn, calls } = createStreamFn([fauxAssistantMessage("done", { stopReason: "stop" })]);
 
 			await createMainWatchdogReview(ctx, { streamFn })(request(enabledConfig(), []));
-			const prompt = String(calls[0]?.context.systemPrompt ?? "");
+			const prompt = getCurrentSystemPrompt(calls[0]!.context.messages);
 			assert.match(prompt, /Standing instructions from WATCHDOG\.md \(project first, then user\):\nNever accept skipped tests\.\n\nu+$/);
 			assert.equal(prompt.split("(project first, then user):\n")[1]?.length, WATCHDOG_GUIDANCE_MAX_CHARS, "combined guidance is capped from the head");
 
@@ -293,7 +295,7 @@ describe("main watchdog review adapter", () => {
 			disabled.guidance = { watchdogMd: false };
 			const second = createStreamFn([fauxAssistantMessage("done", { stopReason: "stop" })]);
 			await createMainWatchdogReview(ctx, { streamFn: second.streamFn })(request(disabled, []));
-			assert.doesNotMatch(String(second.calls[0]?.context.systemPrompt ?? ""), /Standing instructions/);
+			assert.doesNotMatch(getCurrentSystemPrompt(second.calls[0]!.context.messages), /Standing instructions/);
 		} finally {
 			if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
@@ -306,14 +308,15 @@ describe("main watchdog review adapter", () => {
 		const ctx = createCtx({ current });
 		const withBaseline = createStreamFn([fauxAssistantMessage("done", { stopReason: "stop" })]);
 		await createMainWatchdogReview(ctx, { streamFn: withBaseline.streamFn, diffBaseline: () => ({ root: "/tmp/watchdog-review", ref: "abc123" }) })(request(enabledConfig(), []));
-		assert.deepEqual(withBaseline.calls[0]?.context.tools?.map((tool) => tool.name).sort(), ["find", "grep", "ls", "read", "watchdog_diff", "watchdog_warn"]);
-		assert.match(String(withBaseline.calls[0]?.context.systemPrompt ?? ""), /watchdog_diff/);
+		assert.deepEqual(getCurrentTools(withBaseline.calls[0]!.context.messages).map((tool) => tool.name).sort(), ["find", "grep", "ls", "read", "watchdog_diff", "watchdog_warn"]);
+		assert.match(getCurrentSystemPrompt(withBaseline.calls[0]!.context.messages), /watchdog_diff/);
 
 		const without = createStreamFn([fauxAssistantMessage("done", { stopReason: "stop" })]);
 		await createMainWatchdogReview(ctx, { streamFn: without.streamFn, diffBaseline: () => undefined })(request(enabledConfig(), []));
-		assert.deepEqual(without.calls[0]?.context.tools?.map((tool) => tool.name).sort(), ["find", "grep", "ls", "read", "watchdog_warn"]);
-		assert.doesNotMatch(String(without.calls[0]?.context.systemPrompt ?? ""), /watchdog_diff/);
-		const schema = without.calls[0]?.context.tools?.find((tool) => tool.name === "watchdog_warn")?.parameters as any;
+		const tools = getCurrentTools(without.calls[0]!.context.messages);
+		assert.deepEqual(tools.map((tool) => tool.name).sort(), ["find", "grep", "ls", "read", "watchdog_warn"]);
+		assert.doesNotMatch(getCurrentSystemPrompt(without.calls[0]!.context.messages), /watchdog_diff/);
+		const schema = tools.find((tool) => tool.name === "watchdog_warn")?.parameters as any;
 		assert.deepEqual(schema.required?.includes("importance"), true);
 		assert.deepEqual(schema.properties.importance.enum, ["low", "medium", "high"]);
 		assert.equal(schema.properties.confidence, undefined);
@@ -332,7 +335,7 @@ describe("main watchdog review adapter", () => {
 		await createMainWatchdogReview(ctx, { streamFn })(request(enabledConfig(), warnings));
 
 		assert.equal(warnings.length, 0);
-		assert.deepEqual(calls[0]?.context.tools?.map((tool) => tool.name).sort(), ["find", "grep", "ls", "read", "watchdog_warn"]);
+		assert.deepEqual(getCurrentTools(calls[0]!.context.messages).map((tool) => tool.name).sort(), ["find", "grep", "ls", "read", "watchdog_warn"]);
 		const toolResult = calls[1]?.context.messages.find((message) => message.role === "toolResult" && message.toolName === "bash");
 		assert.equal(toolResult?.isError, true);
 	});

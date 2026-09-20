@@ -16,6 +16,10 @@ async function hostB(sessionFile: string, params: object, label: string, policy 
 	return JSON.parse(fs.readFileSync(output, "utf8"));
 }
 
+async function hostBatch(sessionFile: string, requests: Array<{ params: object; policy?: string }>, label: string): Promise<any[]> {
+	return hostB(sessionFile, requests, label);
+}
+
 describe("foreign workflow tool steering (separate processes)", () => {
 	installAsyncExecutionHooks();
 	it("delivers ID and directory requests with file-preferred identity; refuses wrong sessions and terminal runs", { timeout: 60000 }, async () => {
@@ -70,16 +74,20 @@ describe("foreign workflow tool steering (separate processes)", () => {
 		const sessionFile = path.join(tempDir, "parent.jsonl");
 		const status = JSON.stringify({ runId, mode: "workflow", state: "running", sessionId: sessionFile, completionOwnerId: "unavailable-owner", pid: 99999999, updatedAt: 1, steps: [{ status: "running", workflowKey: "A" }, { status: "running", workflowKey: "B" }] });
 		fs.writeFileSync(path.join(dir, "status.json"), status);
-		for (const policy of ["forbid", "confirm"]) {
-			const refused = await hostB(sessionFile, { dir }, policy, policy);
+		const [forbidden, confirmation, mismatch, b] = await hostBatch(sessionFile, [
+			{ params: { dir }, policy: "forbid" },
+			{ params: { dir }, policy: "confirm" },
+			{ params: { dir, id: "another-workflow" } },
+			{ params: { id: runId } },
+		], "unavailable-owner");
+		for (const refused of [forbidden, confirmation]) {
 			assert.equal(refused.result.isError, true);
 			assert.match(refused.result.content[0].text, /Authority policy/);
-			assert.equal(fs.existsSync(steerRequestsDir(dir)), false);
+			assert.equal(refused.requestCount, 0);
 		}
-		const mismatch = await hostB(sessionFile, { dir, id: "another-workflow" }, "mismatch");
 		assert.equal(mismatch.result.isError, true);
 		assert.match(mismatch.result.content[0].text, /does not match directory/);
-		const b = await hostB(sessionFile, { id: runId }, "noack");
+		assert.equal(mismatch.requestCount, 0);
 		assert.notEqual(b.result.isError, true, JSON.stringify(b));
 		assert.equal(b.result.details.steering.state, "pending");
 		assert.equal(b.result.details.steering.deliveryStatus, "queued");

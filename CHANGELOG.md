@@ -4,7 +4,12 @@
 
 ### Changed
 
+- Split Windows tests across two isolated CI shards and batch repeated foreign-process steering checks while preserving the per-process concurrency limit.
 - Require substantial delegated mutation work to be classified by implementation topology before writer launch, preventing issue-wide writer commissions across independent seams without forcing artificial fanout.
+
+### Fixed
+
+- Update the development SDK and npm-host smoke coverage for Pi 0.86.0, including compatibility with its stricter JSON message types.
 
 ## [0.70.0] - 2026-09-19
 

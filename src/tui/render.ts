@@ -91,7 +91,7 @@ function capCompactMainWindowResult(component: Component, layout: MainWindowRend
 }
 
 function liveDetailKeyText(): string {
-	return keyText("app.tools.expand");
+	return keyText("app.tools.expand") || "the configured expand key";
 }
 
 export function liveDetailHintText(): string {
