@@ -224,7 +224,7 @@ describe("subagent prompt runtime", () => {
 		assert.doesNotThrow(() => registerSubagentPromptRuntime({} as never));
 	});
 
-	it("registers a requested watchdog_diff at launch HEAD and fails closed outside Git", async (t) => {
+	it("registers a requested watchdog_diff at launch HEAD and reports unavailable baseline outside Git", async (t) => {
 		const repo = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-runtime-diff-"));
 		const outside = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-runtime-no-git-"));
 		t.after(() => {
@@ -257,13 +257,31 @@ describe("subagent prompt runtime", () => {
 
 		const outsideTools = new Map<string, unknown>();
 		const outsideHandlers = new Map<string, Function>();
+		const outsideDiagnostics: Array<ChildToolDiagnostic | undefined> = [];
 		registerSubagentPromptRuntime({
 			on: (event: string, handler: Function) => outsideHandlers.set(event, handler),
 			registerTool: (tool: { name: string }) => outsideTools.set(tool.name, tool),
 			getAllTools: () => [...outsideTools.keys()].map((name) => ({ name })),
-		} as never, childConfig({ cwd: outside, requiredTools: ["watchdog_diff"] }));
-		assert.equal(outsideTools.has("watchdog_diff"), false);
-		assert.throws(() => outsideHandlers.get("agent_start")?.({}), /requested unavailable child tools: watchdog_diff/);
+		} as never, childConfig({ cwd: outside, requiredTools: ["watchdog_diff"], toolDiagnostic: (value) => outsideDiagnostics.push(value) }));
+		assert.equal(outsideTools.has("watchdog_diff"), true);
+		assert.doesNotThrow(() => outsideHandlers.get("agent_start")?.({}));
+		assert.deepEqual(outsideDiagnostics, [undefined]);
+		const unavailable = outsideTools.get("watchdog_diff") as { execute(id: string, params: object): Promise<{ content: Array<{ type: string; text: string }>; details: { chars: number } }> };
+		const unavailableResult = await unavailable.execute("review", {});
+		assert.equal(unavailableResult.content[0]?.type, "text");
+		assert.match(unavailableResult.content[0]?.text ?? "", /no valid Git HEAD baseline/);
+		assert.match(unavailableResult.content[0]?.text ?? "", /No diff can be shown/);
+		assert.equal(unavailableResult.details.chars, unavailableResult.content[0]?.text.length);
+		assert.deepEqual(await unavailable.execute("review", { path: "tracked.txt", stat: true }), unavailableResult);
+		assert.equal(outsideTools.has("contact_supervisor"), false);
+
+		const missingHandlers = new Map<string, Function>();
+		registerSubagentPromptRuntime({
+			on: (event: string, handler: Function) => missingHandlers.set(event, handler),
+			registerTool: (tool: { name: string }) => outsideTools.set(tool.name, tool),
+			getAllTools: () => [...outsideTools.keys()].map((name) => ({ name })),
+		} as never, childConfig({ cwd: outside, requiredTools: ["watchdog_diff", "fixture_search"] }));
+		assert.throws(() => missingHandlers.get("agent_start")?.({}), /requested unavailable child tools: fixture_search/);
 	});
 
 	it("registers no permission hook by default and routes ask only to the watchdog arbiter", async () => {
