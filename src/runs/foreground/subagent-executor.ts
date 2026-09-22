@@ -72,7 +72,7 @@ import { normalizeExtensionBindings, type ExtensionBindings } from "../shared/ex
 import { resolveRequiredChildExtensions } from "../../shared/required-child-extensions.ts";
 import { finalizeSingleOutput, injectSingleOutputInstruction, normalizeSingleOutputOverride, outputPathMappingFromTask, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { assertJsonSchemaObject, cleanupStructuredOutputRuntime, createStructuredOutputRuntime } from "../shared/structured-output.ts";
-import { compactForegroundDetails, getSingleResultOutput, readStatus, resolveChildCwd, sumResultsCost, sumResultsUsage, toAgentToolUsage } from "../../shared/utils.ts";
+import { compactForegroundDetails, getSingleResultOutput, PROMPT_REDACTED, readStatus, resolveChildCwd, sumResultsCost, sumResultsUsage, toAgentToolUsage } from "../../shared/utils.ts";
 import { discardPreservedWorktrees, formatParallelHandoffError, formatParallelHandoffReference, formatStoredParallelHandoffCleanup, parallelHandoffPath, readParallelHandoffManifest, recordParallelHandoffMerge, recordParallelHandoffSupersession, writeParallelHandoffGroup, writeWorktreeSetupHandoff } from "../shared/parallel-handoff.ts";
 import { summarizeContextModes, type ContextMode, type ContextSummary } from "../shared/context-mode.ts";
 import {
@@ -195,9 +195,12 @@ import {
 	DEFAULT_ARTIFACT_CONFIG,
 	DEFAULT_FORK_PREAMBLE,
 	SUBAGENT_ACTIONS,
+	SUBAGENT_ASYNC_STARTED_EVENT,
+	SUBAGENT_CHILD_STATUS_EVENT,
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 	SUBAGENT_FOREGROUND_COMPLETE_EVENT,
+	SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
 	checkSubagentDepth,
 	resolveChildMaxSubagentDepth,
 	resolveCurrentMaxSubagentDepth,
@@ -1809,6 +1812,7 @@ async function resumeAsyncRun(input: {
 	parentModel?: ParentModel;
 	absoluteDeadlineAt?: number;
 	signal?: AbortSignal;
+	onLaunch?: (launch: { agent: string; sessionName?: string; sessionFile?: string; async: boolean; runId?: string }) => void;
 }): Promise<AgentToolResult<Details>> {
 	const followUp = (input.params.message ?? input.params.task ?? "").trim();
 	const attachChain = (input.params.chain?.length ?? 0) > 0 ? input.params.chain as ChainStep[] : undefined;
@@ -1918,7 +1922,7 @@ async function resumeAsyncRun(input: {
 	}
 	if (target.source === "async" && target.runner?.type === "external-job") {
 		if (attachChain) return { content: [{ type: "text", text: "External-job follow-up does not support chain attachment. Use action='resume' with message instead." }], isError: true, details: { mode: "management", results: [] } };
-		return resumeExternalJobFollowUp({
+		const resumed = await resumeExternalJobFollowUp({
 			target,
 			followUp,
 			baseAgentConfig,
@@ -1932,6 +1936,9 @@ async function resumeAsyncRun(input: {
 			parentSessionFile,
 			absoluteDeadlineAt: input.absoluteDeadlineAt,
 		});
+		const resumedRunId = resumed.details.runId ?? resumed.details.asyncId;
+		if (!resumed.isError && resumedRunId) input.onLaunch?.({ agent: target.agent, async: true, runId: resumedRunId });
+		return resumed;
 	}
 
 	if (attachChain) {
@@ -2038,6 +2045,7 @@ async function resumeAsyncRun(input: {
 			return result;
 		}
 		const attachedId = result.details.asyncId ?? runId;
+		input.onLaunch?.({ agent: target.agent, ...(target.sessionFile ? { sessionFile: target.sessionFile } : {}), async: true, runId: attachedId });
 		const lines = [
 			`Attached async subagent ${target.runId} as the first step of a new chain.`,
 			`Chain run: ${attachedId}`,
@@ -2190,9 +2198,11 @@ async function resumeAsyncRun(input: {
 		workflowKey: input.params.workflowKey,
 		activeAsyncCapacity,
 	}));
+	const notifyLaunch = (): void => input.onLaunch?.({ agent: target.agent, sessionFile: revivalSessionFile, async: true, runId });
 	if (result.isError) {
 		const startedStatus = readStatus(revivalAsyncDir);
 		if (input.params.workflowParentRunId !== undefined && startedStatus?.runId === runId && startedStatus.processTerminal?.runnerProcessInstanceId) {
+			notifyLaunch();
 			return {
 				...result,
 				details: {
@@ -2207,6 +2217,7 @@ async function resumeAsyncRun(input: {
 		activeAsyncCapacity?.rollback();
 		return result;
 	}
+	notifyLaunch();
 	for (const brief of queuedBriefs) fs.rmSync(brief.path, { force: true });
 	if (queuedBriefs.length > 0 && sourceAsyncDir) {
 		const sourceStatus = readStatus(sourceAsyncDir);
@@ -5345,10 +5356,15 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					deps.refreshResultDelivery?.();
 					return false;
 				};
+				const pendingWorkflowChildAnnouncements = new Map<string, NonNullable<AsyncStatus["steps"]>[number]>();
+				let announcePersistedWorkflowChildren = (): void => {};
 				const runPersistence = createCapacityResilientJsonWriter({
 					keepAlive: true,
 					onSuccess: (filePath, payload) => {
-						if (filePath === statusPath) queueActiveRunIndex(payload as AsyncStatus);
+						if (filePath === statusPath) {
+							announcePersistedWorkflowChildren();
+							queueActiveRunIndex(payload as AsyncStatus);
+						}
 						if (filePath === resultPath) settleResultPublication?.(true);
 					},
 					onError: (error, filePath) => {
@@ -5369,7 +5385,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				// terminal writes stay fail-fast on purpose: no child work is at risk by then, and
 				// silently dropping a terminal write would leave status.json and the active-run
 				// index pinned at "running" after the result already says complete.
-				const persist = (options: { tolerateStatusWriteFailure?: boolean } = {}) => {
+				const persist = (options: { tolerateStatusWriteFailure?: boolean } = {}): void => {
 					if (persistClosed) return;
 					const liveJob = deps.state.asyncJobs.get(workflowRunId);
 					if (liveJob && (liveJob.status === "complete" || liveJob.status === "failed") && status.state !== "complete" && status.state !== "failed") return;
@@ -5383,7 +5399,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					} else if (options.tolerateStatusWriteFailure) {
 						try {
 							runPersistence.write(statusPath, { ...status });
-							statusPersistenceDegraded = false;
+							if (runPersistence.pendingCount() === 0) statusPersistenceDegraded = false;
 						} catch (error) {
 							const message = `Failed to persist async workflow state ${statusPath}: ${error instanceof Error ? error.message : String(error)}`;
 							console.error(message, error);
@@ -5472,6 +5488,24 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					return { content: [{ type: "text", text: `Failed to create async workflow storage: ${error instanceof Error ? error.message : String(error)}` }], isError: true, details: { mode: "workflow", results: [] } };
 				}
 				appendWorkflowEvent({ type: "subagent.workflow.started", ...(workflowArgsDigest ? { argsDigest: workflowArgsDigest } : {}) });
+				try {
+					deps.pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
+						lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
+						id: workflowRunId,
+						asyncDir,
+						cwd: workflowCwd,
+						...(workflowSessionRoot ? { sessionRoot: workflowSessionRoot } : {}),
+						pid: process.pid,
+						sessionId: currentSessionId ?? undefined,
+						completionOwnerId,
+						mode: "workflow",
+						agent: "workflow",
+						goal: derivedObjective.trim() ? PROMPT_REDACTED : undefined,
+						...(timeout !== undefined ? { timeoutMs: timeout, deadlineAt: startedAt + timeout } : {}),
+					});
+				} catch (error) {
+					console.error("Failed to emit async workflow start event:", error);
+				}
 				// The runner does not execute workflow scripts: this active owner must consume its own
 				// durable steer inbox, deliver through in-process child controls, and persist receipts.
 				const emitWorkflowSteerEvent = (type: string, requestId: string, index?: number, extra: Record<string, unknown> = {}): void => {
@@ -5627,6 +5661,41 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					const childOutputClaimPaths = new Map<string, string>();
 					const producedChildOutputPaths = new Set<string>();
 					const workflowSteps = new Map<string, NonNullable<AsyncStatus["steps"]>[number]>();
+					const announcedWorkflowChildren = new Set<string>();
+					const announceWorkflowChild = (key: string, step: NonNullable<AsyncStatus["steps"]>[number]): void => {
+						if (announcedWorkflowChildren.has(key)) return;
+						announcedWorkflowChildren.add(key);
+						const stepIndex = status.steps?.indexOf(step);
+						const childEvent: SubagentChildStatusEvent = {
+							type: "subagent.child-status",
+							version: 1,
+							runId: workflowRunId,
+							childId: key,
+							status: "started",
+							ts: Date.now(),
+							source: "async",
+							asyncDir,
+							...(stepIndex !== undefined ? { stepIndex } : {}),
+							agent: step.agent,
+							...(step.runId ? { childRunId: step.runId } : {}),
+							workflowKey: key,
+							...(step.phase ? { phase: step.phase } : {}),
+							...(step.label ? { label: step.label } : {}),
+						};
+						appendWorkflowEvent({ ...childEvent });
+						try {
+							deps.pi.events.emit(SUBAGENT_CHILD_STATUS_EVENT, childEvent);
+						} catch (error) {
+							console.error("Failed to emit workflow child status event:", error);
+						}
+					};
+					announcePersistedWorkflowChildren = () => {
+						for (const [key, step] of pendingWorkflowChildAnnouncements) {
+							if (!step.runId) continue;
+							announceWorkflowChild(key, step);
+							pendingWorkflowChildAnnouncements.delete(key);
+						}
+					};
 					const runHostCommand = workflowHostCommandRunner({
 						workflowCwd,
 						artifactsDir: workflowArtifactsDir,
@@ -5844,6 +5913,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 											step.async = launch.async;
 											if (launch.runId) step.runId = launch.runId;
 											if (childRequest.lane) step.lane = childRequest.lane;
+											if (step.runId) pendingWorkflowChildAnnouncements.set(key, step);
 											persist({ tolerateStatusWriteFailure: true });
 										}
 										recordMissionWorkflowChild(missionBinding, workflowRunId, key, { status: "running", agent: launch.agent, ...(launch.sessionFile ? { sessionPath: launch.sessionFile } : {}) });
@@ -6606,7 +6676,18 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots, abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) })));
 			}
 			if (action === "resume") {
-				return resumeAsyncRun(omitUndefinedProperties({ params: paramsWithResolvedCwd, requestCwd, ctx, deps, parentModel: requestParentModel, signal }));
+				return resumeAsyncRun(omitUndefinedProperties({
+					params: paramsWithResolvedCwd,
+					requestCwd,
+					ctx,
+					deps,
+					parentModel: requestParentModel,
+					signal,
+					...(workflowLaunchObserver ? { onLaunch: (launch: Parameters<NonNullable<typeof workflowLaunchObserver>>[0]) => {
+						workflowLaunchObservers.delete(params);
+						workflowLaunchObserver(launch);
+					} } : {}),
+				}));
 			}
 			if (action === "steer") {
 				if (paramsWithResolvedCwd.mode !== undefined && resolveSteerDeliveryMode(paramsWithResolvedCwd.mode) === undefined) {

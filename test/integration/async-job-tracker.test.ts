@@ -292,6 +292,33 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		}
 	});
 
+	it("preserves a workflow job's established session root when attaching its start event", () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-workflow-session-root-");
+		const sessionRoot = createTempDir("pi-explicit-workflow-sessions-");
+		try {
+			const state = createState();
+			const tracker = createTracker(createEventRecorder().pi, state as never, asyncRoot);
+			const runId = "workflow-established-session-root";
+			const asyncDir = path.join(asyncRoot, runId);
+			state.asyncJobs.set(runId, {
+				asyncId: runId,
+				asyncDir,
+				sessionRoot,
+				status: "running",
+				mode: "workflow",
+				startedAt: 100,
+				updatedAt: 100,
+			});
+
+			tracker.handleStarted({ id: runId, asyncDir, agent: "workflow", mode: "workflow" });
+
+			assert.equal(state.asyncJobs.get(runId)?.sessionRoot, sessionRoot);
+		} finally {
+			removeTempDir(asyncRoot);
+			removeTempDir(sessionRoot);
+		}
+	});
+
 	it("ignores unregistered session roots from async start events", () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-forged-session-root-");
 		try {
@@ -2183,7 +2210,7 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		}
 	});
 
-	it("bridges async child status events from events.jsonl to the parent event bus", async () => {
+	it("bridges async child started events from events.jsonl to the parent event bus", async () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-");
 		try {
 			const runDir = path.join(asyncRoot, "run-child-status");
@@ -2201,9 +2228,8 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 				version: 1,
 				runId: "run-child-status",
 				childId: "slow",
-				status: "stopped",
+				status: "started",
 				ts: 123,
-				reason: "user",
 				stepIndex: 0,
 				agent: "worker",
 				workflowKey: "slow",
@@ -2227,15 +2253,63 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 				version: 1,
 				runId: "run-child-status",
 				childId: "slow",
-				status: "stopped",
+				status: "started",
 				ts: 123,
-				reason: "user",
 				source: "async",
 				asyncDir: runDir,
 				stepIndex: 0,
 				agent: "worker",
 				workflowKey: "slow",
 			});
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("continues replay after a child-status subscriber throws", async (t) => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const runDir = path.join(asyncRoot, "run-throwing-child-status");
+			fs.mkdirSync(runDir, { recursive: true });
+			fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
+				runId: "run-throwing-child-status",
+				mode: "workflow",
+				state: "running",
+				startedAt: Date.now() - 1000,
+				lastUpdate: Date.now(),
+				steps: [{ agent: "worker", status: "running", workflowKey: "child" }],
+			}), "utf-8");
+			const childEvent = (status: "started" | "stopped", ts: number) => JSON.stringify({
+				type: "subagent.child-status",
+				version: 1,
+				runId: "run-throwing-child-status",
+				childId: "child",
+				status,
+				ts,
+				workflowKey: "child",
+			});
+			fs.writeFileSync(path.join(runDir, "events.jsonl"), `${childEvent("started", 123)}\n${childEvent("stopped", 124)}\n`, "utf-8");
+
+			let emitAttempts = 0;
+			const delivered: unknown[] = [];
+			const pi = { events: { emit(channel: string, data: unknown) {
+				if (channel !== SUBAGENT_CHILD_STATUS_EVENT) return;
+				emitAttempts += 1;
+				if (emitAttempts === 1) throw new Error("simulated replay subscriber failure");
+				delivered.push(data);
+			} } };
+			const diagnostics: unknown[][] = [];
+			const originalError = console.error;
+			console.error = (...args: unknown[]) => { diagnostics.push(args); };
+			t.after(() => { console.error = originalError; });
+			const tracker = createTracker(pi, createState() as never, asyncRoot, { pollIntervalMs: 10 });
+			tracker.handleStarted({ id: "run-throwing-child-status", asyncDir: runDir, agent: "workflow" });
+
+			await waitForCondition(() => delivered.length === 1, "later child status event");
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			assert.equal(emitAttempts, 2);
+			assert.equal((delivered[0] as { status?: string }).status, "stopped");
+			assert.ok(diagnostics.some(([message]) => message === "Failed to emit async child status event:"));
 		} finally {
 			removeTempDir(asyncRoot);
 		}
