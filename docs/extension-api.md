@@ -437,7 +437,7 @@ The provider returns handles with `providerJobId`, `state`, optional `handleUrl`
 
 `followUp(input)` is optional. When it is present, a completed external-job run can be continued with `subagent({ action: "resume", id: "<run>", message: "..." })`. Pi sends the completed parent provider job id plus a stable `requestId` and `requestDigest`. The provider must continue that parent conversation or fail closed. It must not open a fresh thread when the parent conversation is missing.
 
-The async runner process does not import provider internals. It writes operation requests into its async run directory. The parent Pi process services those requests against the registered provider and writes operation responses. If the provider is not registered, the bridge fails closed with an actionable error. If a run is recovered after provider job metadata exists, the runner calls `reattach` and `result`; it does not call `start` or `follow-up` again.
+The async runner process does not import provider internals. It writes operation requests into its async run directory. The Pi process of the session that launched the run services those requests against the registered provider and writes operation responses. A child session services the external-job runs it launches. Register the provider in that child too, for example through the child agent's `extensions`. If the provider is not registered, the bridge fails closed with an actionable error. If a run is recovered after provider job metadata exists, the runner calls `reattach` and `result`; it does not call `start` or `follow-up` again.
 
 ## Inspect integration
 

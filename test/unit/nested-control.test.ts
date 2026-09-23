@@ -10,6 +10,8 @@ import type { ChildRuntimeConfig } from "../../src/runs/shared/child-runtime-con
 import { ASYNC_DIR, type SubagentState } from "../../src/shared/types.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
 import { getArtifactPaths, getArtifactsDir } from "../../src/shared/artifacts.ts";
+import { EXTERNAL_JOB_PROVIDER_REGISTRY_KEY, registerExternalJobProvider } from "../../src/api/external-job-provider.ts";
+import { runExternalJob } from "../../src/runs/shared/external-job-runner.ts";
 
 const routeRoots: string[] = [];
 const fanoutListenerCleanupKey = "__piSubagentFanoutChildNestedControlInboxCleanups";
@@ -512,6 +514,45 @@ describe("nested control routing", () => {
 			assert.match(registry.children[0]?.error ?? "", /model registry exploded/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("services the external-job bridge of an async run that the fanout child launched", async () => {
+		const route = createNestedRoute("root-external-job");
+		routeRoots.push(path.dirname(route.eventSink));
+		const asyncDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-external-job-"));
+		routeRoots.push(asyncDir);
+		const writeStatus = (state: string) => fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({ state, steps: [{ runner: { type: "external-job" } }] }));
+		writeStatus("running");
+		registerExternalJobProvider({
+			name: "surf-oracle",
+			start: () => ({ providerJobId: "job-1", state: "completed" }),
+			status: () => ({ providerJobId: "job-1", state: "completed" }),
+			reattach: () => ({ providerJobId: "job-1", state: "completed" }),
+			result: () => ({ providerJobId: "job-1", state: "completed", output: "advisor result" }),
+		});
+		const listeners = new Map<string, (payload: unknown) => void>();
+		const lifecycle = new Map<string, () => void>();
+		const pi = {
+			on(event: string, handler: () => void) { lifecycle.set(event, handler); },
+			events: { emit() {}, on(event: string, handler: (payload: unknown) => void) { listeners.set(event, handler); return () => listeners.delete(event); } },
+			registerTool() {},
+			getSessionName() { return "child"; },
+		} as any;
+		let stop: (() => void) | undefined;
+		try {
+			registerFanoutChildSubagentExtension(pi, fanoutChildRuntime(route, "root-external-job"));
+			listeners.get("subagent:async-started")?.({ id: "run-1", asyncDir });
+			let output: string | undefined;
+			void runExternalJob({ provider: "surf-oracle", options: {}, cwd: asyncDir, prompt: "prompt text", asyncDir, stepIndex: 0, runId: "run-1", agent: "gpt-pro", registerStop: (handler) => { stop = handler; } })
+				.then((result) => { output = result.output; });
+			await waitFor(() => output !== undefined, 5_000);
+			assert.equal(output, "advisor result");
+		} finally {
+			stop?.();
+			writeStatus("complete");
+			lifecycle.get("session_shutdown")?.();
+			delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for(EXTERNAL_JOB_PROVIDER_REGISTRY_KEY)];
 		}
 	});
 

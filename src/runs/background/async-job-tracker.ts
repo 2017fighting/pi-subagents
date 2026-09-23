@@ -22,7 +22,7 @@ import { normalizeParallelGroups } from "./parallel-groups.ts";
 import { reconcileAsyncRun, reconcileNestedAsyncDescendants } from "./stale-run-reconciler.ts";
 import { findNestedRouteForRootId, hasLiveNestedDescendants, retainNestedLookupRoute, updateAsyncJobNestedProjection } from "../shared/nested-events.ts";
 import { listAsyncRuns, type AsyncRunSummary } from "./async-status.ts";
-import { EXTERNAL_JOB_BRIDGE_REQUEST_DIR, serviceExternalJobBridgeRequests } from "../shared/external-job-bridge.ts";
+import { EXTERNAL_JOB_BRIDGE_REQUEST_DIR, externalJobBridgeEligibility, serviceExternalJobBridgeRequests } from "../shared/external-job-bridge.ts";
 import { shouldUseNativeFsWatch } from "../../shared/watch-strategy.ts";
 import { parseWorkflowChildSummary } from "../../workflows/workflow-child-summary.ts";
 import { validHostStepNodes } from "../shared/host-step-status.ts";
@@ -85,19 +85,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	// Early native failure is visible before its publisher finishes. Retain only
 	// that scoped observation, using the existing liveness sweep to renew delivery.
 	const terminalPublications = new Map<string, { instanceId: string; pending: true } | { pending: false }>();
-	const externalJobBridgeEligibility = (steps: AsyncJobState["steps"]): "required" | "not-required" | "unknown" => {
-		if (!Array.isArray(steps)) return "unknown";
-		for (const step of steps) {
-			const runner = (step as { runner?: unknown } | null)?.runner;
-			if (runner === undefined) continue;
-			if (!runner || typeof runner !== "object" || Array.isArray(runner)) return "unknown";
-			const runnerType = (runner as { type?: unknown }).type;
-			if (typeof runnerType !== "string") return "unknown";
-			if (runnerType === "external-job") return "required";
-			if (runnerType !== "pi" && runnerType !== "external-cli") return "unknown";
-		}
-		return "not-required";
-	};
 	let rootWatcher: fs.FSWatcher | undefined;
 	let nextLivenessAt = Date.now() + livenessIntervalMs;
 	let nextWidgetAnimationAt = Date.now() + WIDGET_ANIMATION_INTERVAL_MS;
