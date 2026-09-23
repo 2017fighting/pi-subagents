@@ -106,6 +106,7 @@ export interface ChildSession {
 	readonly sessionFile: string | undefined;
 	readonly sessionId: string;
 	readonly modelId: string | undefined;
+	readonly contextWindow?: number;
 	readonly machineEvidence?: { machineId: string; initial?: HerdrRemoteGitStatus; final?: HerdrRemoteGitStatus };
 	/** Event-updated pane-native status; reading it performs no network work. */
 	readonly placementSnapshot?: unknown;
@@ -427,6 +428,7 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 				get sessionFile() { return session.sessionFile; },
 				get sessionId() { return session.sessionId; },
 				get modelId() { return session.model ? `${session.model.provider}/${session.model.id}` : undefined; },
+				get contextWindow() { return session.model?.contextWindow; },
 			};
 			live.add(child);
 			return child;

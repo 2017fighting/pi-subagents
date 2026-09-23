@@ -93,6 +93,7 @@ export interface RunChildSessionInput {
 	timeoutMessage?: string;
 	stopMessage?: string;
 	onChildEvent?: (event: ChildEvent) => void;
+	onContextWindow?: (contextWindow: number) => void;
 	transcriptWriter?: ChildTranscriptWriter;
 	toolTimeoutMs?: number;
 	runDeadlineAt?: number;
@@ -653,6 +654,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 					return;
 				}
 				session = created;
+				if (created.contextWindow !== undefined) input.onContextWindow?.(created.contextWindow);
 				const steer = created.steer.bind(created);
 				const followUp = created.followUp.bind(created);
 				created.steer = async (text) => {

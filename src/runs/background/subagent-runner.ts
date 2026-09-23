@@ -1094,9 +1094,9 @@ export async function runSingleStepInner(
 			const message = error instanceof Error ? error.message : String(error);
 			return omitUndefinedProperties({ agent: step.agent, output: message, error: message, exitCode: 1, context: step.context, thinkingCeiling: step.thinkingCeiling });
 		}
+		const attemptModel = omitUndefinedProperties({ model: candidate, thinking: resolveEffectiveThinking(candidate, step.thinking) });
 		ctx.onAttemptStart?.(omitUndefinedProperties({
-			model: candidate,
-			thinking: resolveEffectiveThinking(candidate, step.thinking),
+			...attemptModel,
 			contextLimit: findModelInfo(candidate, step.modelVerificationRegistry)?.contextWindow,
 		}));
 		const outputSnapshot = captureSingleOutputSnapshot(step.outputPath);
@@ -1212,6 +1212,7 @@ export async function runSingleStepInner(
 			timeoutMessage: ctx.timeoutMessage,
 			stopMessage: ctx.stopMessage,
 			onChildEvent: ctx.onChildEvent,
+			onContextWindow: (contextLimit) => ctx.onAttemptStart?.({ ...attemptModel, contextLimit }),
 			transcriptWriter,
 			toolTimeoutMs: ctx.toolTimeoutMs,
 			runDeadlineAt: ctx.deadlineAt,

@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Async status now reports a subagent's actual context limit once its session starts, including a window raised by an extension, instead of the parent registry's value. Thanks to [@johnhenaot](https://github.com/johnhenaot) for [#2448](https://github.com/nicobailon/pi-subagents/pull/2448).
 - Worktree naming labels stay within the 256-byte limit when truncated at a multi-byte UTF-8 boundary, so async status remains readable. Thanks to [@chenhaoxiang](https://github.com/chenhaoxiang) for [#2446](https://github.com/nicobailon/pi-subagents/pull/2446).
 
 ## [0.71.0] - 2026-09-23

@@ -480,6 +480,14 @@ describe("default child session factory", () => {
 		assert.deepEqual(pendingRuntime?.pendingNativeProviderRegistrations, []);
 	});
 
+	it("reports the context window an extension raised while the child session started", async () => {
+		const session = { model: { provider: "openai-codex", id: "gpt-6-sol", contextWindow: 272_000 }, async bindExtensions() { this.model = { ...this.model, contextWindow: 1_050_000 }; } };
+		const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => stubPi(session) });
+		const child = await factory.create(stubLaunch);
+
+		assert.equal(child.contextWindow, 1_050_000);
+	});
+
 	it("resolves queued providers when the loader has no native provider queue", async () => {
 		const registeredProviders: string[] = [];
 		let refreshed = false;
