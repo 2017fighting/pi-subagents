@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- A bundled tmux inspector plugin opens a read-only dashboard pane for an async run, and supports status, close, and focus. It activates whenever `TMUX` is set, so Fleet inspection works inside tmux instead of failing closed. The binding records the tmux server identity, so a restarted server never claims a reused pane id.
+
 ### Fixed
 
 - `subagent_supervisor` `pending` now shows each request's question text, so a parent that missed the request notice can still read and answer it ([#2460](https://github.com/nicobailon/pi-subagents/issues/2460)).

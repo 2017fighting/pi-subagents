@@ -450,7 +450,7 @@ subagent({ action: "inspector.status", id: "<run-id>", index: 0 })
 subagent({ action: "inspector.close", id: "<run-id>", index: 0 })
 ```
 
-`inspector.command` returns a standalone runner command without contacting a host or writing a binding. `inspector.open` selects an available bundled inspector plugin. `status` and `close` select the plugin that owns the run binding and report clearly when that plugin does not support the requested lifecycle action. Without an available plugin, `open` fails closed with an actionable message; ordinary launches remain headless. Closing an inspector never stops the run.
+`inspector.command` returns a standalone runner command without contacting a host or writing a binding. `inspector.open` selects the first available bundled inspector plugin. `status` and `close` select the plugin that owns the run binding and report clearly when that plugin does not support the requested lifecycle action. Without an available plugin, `open` fails closed with an actionable message; ordinary launches remain headless. Closing an inspector never stops the run.
 
 ### Herdr inspector plugin
 
@@ -458,7 +458,11 @@ The bundled Herdr inspector plugin supports Herdr 0.7.5+. It opens a raw dashboa
 
 ### Ghostty inspector plugin
 
-Ghostty 1.3+ on macOS is the second bundled open-only plugin, using Ghostty's preview AppleScript API. It splits the focused terminal and launches the read-only inspector command; status and close are unavailable because it writes no binding. Ghostty Automation permission is required.
+Ghostty 1.3+ on macOS is an open-only plugin, using Ghostty's preview AppleScript API. It splits the focused terminal and launches the read-only inspector command; status and close are unavailable because it writes no binding. Ghostty Automation permission is required.
+
+### tmux inspector plugin
+
+The tmux plugin is available whenever `TMUX` is set, and it writes a binding. It splits the pane that hosts the current session, so it works from a nested tmux inside another terminal host. It reads lifecycle, status, output, and mission artifacts; steer and stop continue through pi-subagents' existing control inbox. Unlike Herdr, `focus: true` can select the recorded pane, even when it lives in another window or session. The binding records the tmux server identity from `TMUX`, so a restarted server does not claim a pane id that now belongs to something else.
 
 ## Herdr integration
 
